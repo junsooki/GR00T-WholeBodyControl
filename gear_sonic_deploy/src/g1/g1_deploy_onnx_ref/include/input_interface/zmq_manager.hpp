@@ -486,7 +486,7 @@ class ZMQManager : public InputInterface {
 
             // Wait for planner to be initialized with timeout (5 seconds)
             auto wait_start = std::chrono::steady_clock::now();
-            constexpr auto PLANNER_INIT_TIMEOUT = std::chrono::seconds(5);
+            constexpr auto PLANNER_INIT_TIMEOUT = std::chrono::seconds(10);
             while (planner_state.enabled) {
               {
                 std::lock_guard<std::mutex> lock(current_motion_mutex);
@@ -497,7 +497,7 @@ class ZMQManager : public InputInterface {
               std::this_thread::sleep_for(std::chrono::milliseconds(100));
               auto elapsed = std::chrono::steady_clock::now() - wait_start;
               if (elapsed > PLANNER_INIT_TIMEOUT) {
-                std::cerr << "[ZMQCommandManager ERROR] Planner initialization timeout after 5 seconds" << std::endl;
+                std::cerr << "[ZMQCommandManager ERROR] Planner initialization timeout after 10 seconds" << std::endl;
                 operator_state.stop = true;
                 return;
               }
@@ -540,7 +540,7 @@ class ZMQManager : public InputInterface {
         
         // Wait for initialization
         auto wait_start = std::chrono::steady_clock::now();
-        constexpr auto PLANNER_INIT_TIMEOUT = std::chrono::seconds(5);
+        constexpr auto PLANNER_INIT_TIMEOUT = std::chrono::seconds(10);
         while (planner_state.enabled) {
           {
             std::lock_guard<std::mutex> lock(current_motion_mutex);
