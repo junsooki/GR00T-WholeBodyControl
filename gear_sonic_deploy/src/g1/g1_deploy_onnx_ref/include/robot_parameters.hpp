@@ -27,6 +27,7 @@
 static const std::string HG_CMD_TOPIC = "rt/lowcmd";       ///< Low-level motor command topic.
 static const std::string HG_IMU_TORSO = "rt/secondary_imu";///< Secondary (torso) IMU topic.
 static const std::string HG_STATE_TOPIC = "rt/lowstate";    ///< Low-level motor / sensor state topic.
+static const std::string WBC_TOKEN_TOPIC = "rt/wbc_token";  ///< 64-dim whole-body token (interim: packed in LowState_).
 
 /// Total number of actuated joints on the G1 (29-DOF configuration).
 const int G1_NUM_MOTOR = 29;
