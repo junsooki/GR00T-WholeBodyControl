@@ -269,6 +269,8 @@ class G1Deploy {
     DataBuffer<MovementState> movement_state_buffer_;
     
     ChannelPublisherPtr<LowCmd_> lowcmd_publisher_;
+    ChannelPublisherPtr<LowState_> wbc_token_publisher_;  ///< 64-dim WBC token (interim: LowState_ on rt/wbc_token)
+    uint32_t wbc_token_seq_ = 0;                          ///< seq stamped into the token msg's tick
     ChannelSubscriberPtr<LowState_> lowstate_subscriber_;
     ChannelSubscriberPtr<IMUState_> imutorso_subscriber_;
     ThreadPtr input_thread_ptr_, command_writer_ptr_, control_thread_ptr_, planner_thread_ptr_;
@@ -1681,7 +1683,25 @@ class G1Deploy {
         token_state_data_[i] = v;
         target_buffer[offset + i] = v;
       }
+      PublishWbcToken(token_dim);
       return true;
+    }
+
+    /// Publish the freshly computed whole-body token for downstream recording
+    /// (SIMPLE).  INTERIM wire: packed into a LowState_ on rt/wbc_token because
+    /// this build has no custom-IDL codegen — token[0..34] -> motor_state[i].q,
+    /// token[35..63] -> motor_state[i-35].dq, tick = seq.  A dedicated WbcToken
+    /// (double[64]) IDL should replace this (see the SIMPLE-side PR).  Runs on the
+    /// control thread right after the token is computed, so no locking is needed.
+    void PublishWbcToken(size_t token_dim) {
+      if (!wbc_token_publisher_) return;
+      LowState_ tok_msg;
+      tok_msg.tick() = ++wbc_token_seq_;
+      for (size_t i = 0; i < token_dim && i < 35; ++i)
+        tok_msg.motor_state().at(i).q() = static_cast<float>(token_state_data_[i]);
+      for (size_t i = 35; i < token_dim && (i - 35) < 35; ++i)
+        tok_msg.motor_state().at(i - 35).dq() = static_cast<float>(token_state_data_[i]);
+      wbc_token_publisher_->Write(tok_msg);
     }
 
     bool GatherEncoderMode(std::vector<double>& target_buffer, size_t offset, int fill_zeros_num = 0) {
@@ -2257,6 +2277,9 @@ class G1Deploy {
       // create publisher
       lowcmd_publisher_.reset(new ChannelPublisher<LowCmd_>(HG_CMD_TOPIC));
       lowcmd_publisher_->InitChannel();
+      // WBC token publisher — interim wire (LowState_ on rt/wbc_token); see PR for the WbcToken IDL
+      wbc_token_publisher_.reset(new ChannelPublisher<LowState_>(WBC_TOKEN_TOPIC));
+      wbc_token_publisher_->InitChannel();
       // create subscriber
       lowstate_subscriber_.reset(new ChannelSubscriber<LowState_>(HG_STATE_TOPIC));
       lowstate_subscriber_->InitChannel(std::bind(&G1Deploy::LowStateHandler, this, std::placeholders::_1), 1);
