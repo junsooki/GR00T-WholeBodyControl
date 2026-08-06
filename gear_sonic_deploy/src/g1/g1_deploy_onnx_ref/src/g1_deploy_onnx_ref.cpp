@@ -57,6 +57,7 @@
 #include <algorithm>
 #include <chrono>
 #include <unistd.h>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <unordered_map>
@@ -295,6 +296,14 @@ class G1Deploy {
     static constexpr std::chrono::milliseconds LOW_STATE_LATE_THRESHOLD{50};
     static constexpr std::chrono::milliseconds LOW_STATE_ABSENT_THRESHOLD{500};
     ProgramState program_state_;
+    // SONIC_AUTO_START env var: engage the policy automatically on the first
+    // WAIT_FOR_CONTROL tick after the init ramp, as if ']' were pressed.
+    // Unset, empty, or "0" leaves the manual ']' flow unchanged.
+    // One-shot: cleared after use so a later stop is not fought.
+    bool auto_start_ = [] {
+      const char* v = std::getenv("SONIC_AUTO_START");
+      return v != nullptr && *v != '\0' && std::strcmp(v, "0") != 0;
+    }();
     std::array<double, G1_NUM_MOTOR> last_action;
     std::array<double, 7> last_left_hand_action;
     std::array<double, 7> last_right_hand_action;
@@ -2159,7 +2168,8 @@ class G1Deploy {
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
-      double initial_max_close_ratio = 1.0)
+      double initial_max_close_ratio = 1.0,
+      std::string default_motion_name = "")
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2267,7 +2277,24 @@ class G1Deploy {
         if (!motion_reader_.motions.empty()) {
           std::cout << "✓ Motion data loaded successfully!" << std::endl;
           // motion_reader_.PrintSummary();
-          motion_reader_.current_motion_index_ = 0;
+
+          // Find the default motion by name (ported from hongyi-wbc: the
+          // startup reference motion is selected by --default-motion instead
+          // of whatever sorts first in the motion directory)
+          int default_motion_index = 0;
+          for (size_t i = 0; i < motion_reader_.motions.size(); i++) {
+            if (motion_reader_.motions[i]->name == default_motion_name) {
+              default_motion_index = i;
+              std::cout << "✓ Found default motion '" << default_motion_name << "' at index " << i << std::endl;
+              break;
+            }
+          }
+          if (default_motion_index == 0 && motion_reader_.motions[0]->name != default_motion_name) {
+            std::cout << "⚠ Warning: Default motion '" << default_motion_name << "' not found, using index 0 ("
+                      << motion_reader_.motions[0]->name << ")" << std::endl;
+          }
+
+          motion_reader_.current_motion_index_ = default_motion_index;
           std::string motion_name;
           {
             std::lock_guard<std::mutex> lock(current_motion_mutex_);
@@ -2761,17 +2788,19 @@ class G1Deploy {
     }
 
     /// Check for valid LowState data and recent updates; if invalid, transition to ERROR state.
-    bool CheckSafety() {
+    /// Pass quiet=true to suppress the error prints (used while deliberately
+    /// waiting for LowState to appear, e.g. the SONIC_AUTO_START wait loop).
+    bool CheckSafety(bool quiet = false) {
       auto low_state_data = low_state_buffer_.GetDataWithTime();
       const std::shared_ptr<const LowState_> ls = low_state_data.data;
       if (!ls) {
-        std::cout << "[ERROR] LowState data is not available in the middle of the control loop!" << std::endl;
+        if (!quiet) std::cout << "[ERROR] LowState data is not available in the middle of the control loop!" << std::endl;
         return false;
       }
 
       auto now = std::chrono::steady_clock::now();
       if (now - low_state_data.timestamp > LOW_STATE_ABSENT_THRESHOLD) {
-        std::cout << "[ERROR] Lost LowState data connection from robot!" << std::endl;
+        if (!quiet) std::cout << "[ERROR] Lost LowState data connection from robot!" << std::endl;
         return false;
       }
 
@@ -3812,7 +3841,17 @@ class G1Deploy {
           break;
 
         case ProgramState::WAIT_FOR_CONTROL:
-          if (!CheckSafety()) {
+          if (!CheckSafety(/*quiet=*/auto_start_)) {
+            if (auto_start_) {
+              // Auto-start pending but the sim is not publishing (fresh)
+              // LowState yet — the stack comes up controller-first, so wait
+              // for it instead of shutting down.  Throttled to ~1 line / 5 s.
+              static int auto_wait_count = 0;
+              if (auto_wait_count++ % 250 == 0) {
+                std::cout << "[Control] SONIC_AUTO_START: LowState not ready — waiting to engage..." << std::endl;
+              }
+              break;
+            }
             std::cout << "[ERROR] Safety check failed, cannot start control." << std::endl;
             operator_state.stop = true;
             break;
@@ -3821,7 +3860,11 @@ class G1Deploy {
           // Re-publish robot_config so late-joining subscribers can receive it
           // before the policy is activated (ZMQ PUB has no persistence).
           for (auto& oi : output_interfaces_) { if (oi) oi->publish_config(); }
-          if (operator_state.start) {
+          if (auto_start_) {
+            std::cout << "[Control] SONIC_AUTO_START set — engaging policy without ']'" << std::endl;
+          }
+          if (operator_state.start || auto_start_) {
+            auto_start_ = false;
             // Warn if starting control in token mode without tokens, but allow it
             if (initial_encoder_mode_ == -1 && !first_token_received_) {
               static int warn_count = 0;
@@ -4122,6 +4165,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --planner-precision <16|32>: specify precision to run the planner model at (default: 16)" << std::endl;
     std::cout << "  --policy-precision <16|32>: specify precision to run the policy model at (default: 32)" << std::endl;
     std::cout << "  --zmq-host <host>: ZMQ server host (default: localhost)" << std::endl;
+    std::cout << "  --default-motion <name>: set the default motion to load on startup (default: neutral_kick_R_001__A543)" << std::endl;
     std::cout << "  --zmq-port <port>: ZMQ server port (default: 5556)" << std::endl;
     std::cout << "  --zmq-topic <topic>: ZMQ topic/prefix (default: pose)" << std::endl;
     std::cout << "  --zmq-conflate: enable ZMQ CONFLATE (default: disabled)" << std::endl;
@@ -4166,6 +4210,7 @@ int main(int argc, char const* argv[]) {
   std::string playbackInputFile = "";
   std::string inputType = "keyboard"; // Default to keyboard
   std::string outputType = "zmq"; // Default to zmq
+  std::string default_motion_name = "neutral_kick_R_001__A543"; // default motion to load on startup
   bool plannerFp16 = false;
   bool policyFp16 = false;
   std::string logsDir = "";
@@ -4357,6 +4402,15 @@ int main(int argc, char const* argv[]) {
     } else if (std::string(argv[i]) == "--enable-motion-recording") {
       enableMotionRecording = true;
       std::cout << "[INFO] Motion recording enabled" << std::endl;
+    } else if (std::string(argv[i]) == "--default-motion") {
+      if (i + 1 < argc) {
+        default_motion_name = argv[i + 1];
+        std::cout << "[INFO] Default motion set to: " << default_motion_name << std::endl;
+        i++; // Skip the next argument since it's the motion name
+      } else {
+        std::cerr << "Error: --default-motion requires a motion name argument" << std::endl;
+        exit(1);
+      }
     } else if (std::string(argv[i]) == "--set-compliance") {
       if (i + 1 < argc) {
         // Parse compliance values (can be 1 or 3 values)
@@ -4441,7 +4495,8 @@ int main(int argc, char const* argv[]) {
     zmq_out_topic,
     enableMotionRecording,
     initial_compliance,
-    initial_max_close_ratio
+    initial_max_close_ratio,
+    default_motion_name
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   

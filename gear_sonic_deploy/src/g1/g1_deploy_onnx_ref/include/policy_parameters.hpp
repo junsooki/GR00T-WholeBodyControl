@@ -224,14 +224,14 @@ const std::array<double, 29> default_angles = {
     0.0, // waist_roll_joint
     0.0, // waist_pitch_joint
     0.2, // left_shoulder_pitch_joint
-    0.2, // left_shoulder_roll_joint
+    0.0, // 0.2, // left_shoulder_roll_joint
     0.0, // left_shoulder_yaw_joint
     0.6, // left_elbow_joint
     0.0, // left_wrist_roll_joint
     0.0, // left_wrist_pitch_joint
     0.0, // left_wrist_yaw_joint
     0.2, // right_shoulder_pitch_joint
-    -0.2, // right_shoulder_roll_joint
+    0.0, // -0.2, // right_shoulder_roll_joint
     0.0, // right_shoulder_yaw_joint
     0.6, // right_elbow_joint
     0.0, // right_wrist_roll_joint
