@@ -270,6 +270,7 @@ class G1Deploy {
     DataBuffer<MovementState> movement_state_buffer_;
     
     ChannelPublisherPtr<LowCmd_> lowcmd_publisher_;
+    ChannelPublisherPtr<LowState_> wbc_token_publisher_;  // 64-dim encoder token on rt/wbc_token (interim LowState_ wire for teleop recording)
     ChannelSubscriberPtr<LowState_> lowstate_subscriber_;
     ChannelSubscriberPtr<IMUState_> imutorso_subscriber_;
     ThreadPtr input_thread_ptr_, command_writer_ptr_, control_thread_ptr_, planner_thread_ptr_;
@@ -2267,6 +2268,10 @@ class G1Deploy {
       // create publisher
       lowcmd_publisher_.reset(new ChannelPublisher<LowCmd_>(HG_CMD_TOPIC));
       lowcmd_publisher_->InitChannel();
+      // Publish the 64-dim encoder token so teleop recording (pico_wbc_agent) can capture it.
+      wbc_token_publisher_.reset(new ChannelPublisher<LowState_>("rt/wbc_token"));
+      wbc_token_publisher_->InitChannel();
+      std::cout << "[WBC] rt/wbc_token publisher active (encoder token -> teleop recording)" << std::endl;
       // create subscriber
       lowstate_subscriber_.reset(new ChannelSubscriber<LowState_>(HG_STATE_TOPIC));
       lowstate_subscriber_->InitChannel(std::bind(&G1Deploy::LowStateHandler, this, std::placeholders::_1), 1);
@@ -3981,6 +3986,16 @@ class G1Deploy {
             if (!state_logger_->LogPostState(std::span(token_state_data_), current_encoder_mode_copy, motion_name, current_play_copy)) {
               std::cerr << "[WARNING] Failed to log token state to state logger" << std::endl;
             }
+          }
+
+          // Publish the current 64-dim encoder token on rt/wbc_token so teleop recording
+          // (pico_wbc_agent._TokenHandler) can capture it. Interim wire mirrors that unpack:
+          // token[0..34] -> motor_state[i].q, token[35..63] -> motor_state[i-35].dq.
+          if (wbc_token_publisher_ && token_state_data_.size() >= 64) {
+            LowState_ tok_msg{};
+            for (size_t i = 0; i < 35; ++i) tok_msg.motor_state().at(i).q() = token_state_data_[i];
+            for (size_t i = 35; i < 64; ++i) tok_msg.motor_state().at(i - 35).dq() = token_state_data_[i];
+            wbc_token_publisher_->Write(tok_msg);
           }
 
           auto obs_end_time = std::chrono::steady_clock::now();
