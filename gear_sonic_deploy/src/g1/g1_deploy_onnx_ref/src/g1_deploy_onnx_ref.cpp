@@ -2198,7 +2198,15 @@ class G1Deploy {
         initial_max_close_ratio_(initial_max_close_ratio),
         //env(ORT_LOGGING_LEVEL_WARNING, "G1Deploy"),
         model_path(model_file_path),
-        planner_path(planner_file_path) {
+        planner_path(planner_file_path),
+        lockstep_gate_([this](const std::string& event, const LockstepEnvelope& envelope) {
+          if (event.rfind("reject", 0) == 0) {
+            std::cerr << "[Lockstep REJECT] event=" << event
+                      << " session=" << envelope.session
+                      << " step=" << envelope.sim_step
+                      << " action=" << envelope.action_seq << std::endl;
+          }
+        }) {
       
       // Initialize ChannelFactory
       ChannelFactory::Instance()->Init(0, networkInterface);
