@@ -307,11 +307,6 @@ class ZMQManager : public InputInterface {
                       DataBuffer<MovementState>& movement_state_buffer,
                       std::mutex& current_motion_mutex,
                       bool& report_temperature) override {
-      if (!has_planner) {
-        std::cerr << "[ZMQCommandManager ERROR] Planner not available in planner mode" << std::endl;
-        operator_state.stop = true;
-        return;
-      }
       // Emergency stop
       if (report_temperature_flag_) {
         report_temperature = true;
@@ -362,6 +357,11 @@ class ZMQManager : public InputInterface {
 
       // Delegate based on current mode
       if (active_mode_ == ManagedMode::PLANNER) {
+        if (!has_planner) {
+          std::cerr << "[ZMQCommandManager ERROR] Planner not available in planner mode" << std::endl;
+          operator_state.stop = true;
+          return;
+        }
         // Planner mode: handle planner input ourselves
         handlePlannerInput(motion_reader, current_motion, current_frame,
                           operator_state, reinitialize_heading,
@@ -435,6 +435,33 @@ class ZMQManager : public InputInterface {
         return pose_interface_->GetExternalTokenState();
       }
       return InputInterface::GetExternalTokenState();
+    }
+
+    std::shared_ptr<const LockstepTokenBundle> GetLockstepTokenBundle() const override {
+      return pose_interface_ ? pose_interface_->GetLockstepTokenBundle() : nullptr;
+    }
+
+    void SetLockstepTokenCallback(
+        std::function<void(const LockstepTokenBundle&)> callback) override {
+      if (pose_interface_) pose_interface_->SetLockstepTokenCallback(std::move(callback));
+    }
+
+    void ResetLockstepInput() override {
+      if (pose_interface_) pose_interface_->ResetLockstepInput();
+      has_external_token_state_ = false;
+      has_hand_joints_ = false;
+    }
+
+    bool IsStreamedMotionMode() const override {
+      return active_mode_ == ManagedMode::STREAMED_MOTION && pose_interface_ &&
+             pose_interface_->IsStreamedMotionMode();
+    }
+
+    void PrepareLockstepMode() override {
+      active_mode_ = ManagedMode::STREAMED_MOTION;
+      if (pose_interface_) pose_interface_->PrepareLockstepMode();
+      is_planner_ready_ = false;
+      switch_from_teleop_to_planner_ = false;
     }
 
     std::optional<std::chrono::steady_clock::time_point> GetLastUpdateTime() const override {

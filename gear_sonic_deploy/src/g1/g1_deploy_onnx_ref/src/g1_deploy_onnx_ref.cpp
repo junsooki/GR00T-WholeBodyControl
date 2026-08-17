@@ -66,6 +66,7 @@
 #include <chrono>
 #include <algorithm>
 #include <numeric>
+#include <thread>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -124,6 +125,7 @@
 
 #include <cuda_runtime.h>
 #include "../include/state_logger.hpp"
+#include "../include/sim_lockstep.hpp"
 
 // Encoder
 #include "../include/encoder.hpp"
@@ -249,6 +251,7 @@ class G1Deploy {
     // =========================================================================
     // Flag to disable CRC checking for MuJoCo simulation
     bool disable_crc_check_ = false;
+    bool sim_lockstep_ = false;
     
     bool reinitialize_heading_ = true;
     bool report_temperature_ = false;
@@ -274,6 +277,9 @@ class G1Deploy {
     ChannelSubscriberPtr<LowState_> lowstate_subscriber_;
     ChannelSubscriberPtr<IMUState_> imutorso_subscriber_;
     ThreadPtr input_thread_ptr_, command_writer_ptr_, control_thread_ptr_, planner_thread_ptr_;
+    SimLockstepGate lockstep_gate_;
+    std::jthread lockstep_control_thread_;
+    uint64_t lockstep_control_count_ = 0;
     
     // =========================================================================
     // External clients and peripheral managers
@@ -2170,7 +2176,8 @@ class G1Deploy {
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
       double initial_max_close_ratio = 1.0,
-      std::string default_motion_name = "")
+      std::string default_motion_name = "",
+      bool sim_lockstep = false)
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2181,6 +2188,7 @@ class G1Deploy {
         mode_pr_(Mode::PR),
         mode_machine_(0),
         disable_crc_check_(disable_crc_check),
+        sim_lockstep_(sim_lockstep),
         program_state_(ProgramState::INIT),
         last_action {0.0},
         last_left_hand_action {0.0},
@@ -2466,13 +2474,14 @@ class G1Deploy {
       robot_config["is_using_encoder"] = is_using_encoder_;
       robot_config["policy_fp16"] = policy_fp16;
       robot_config["planner_fp16"] = planner_fp16;
+      robot_config["sim_lockstep"] = sim_lockstep_;
 
       // Initialize state logger with complete robot configuration
       try {
         std::string resolved_logs_dir = logs_dir;
         // dt is control_dt_; pass complete robot_config to constructor
         state_logger_ = std::make_unique<StateLogger>(resolved_logs_dir, 10000, G1_NUM_MOTOR, G1_NUM_MOTOR, 
-                                                       control_dt_, enable_csv_logs, robot_config);
+                                                       control_dt_, enable_csv_logs, robot_config, sim_lockstep_);
       } catch (const std::exception& e) {
         std::cerr << "[ERROR] Failed to initialize state logger: " << e.what() << std::endl;
         std::cerr << "State logger is required for operation. Exiting..." << std::endl;
@@ -2609,15 +2618,26 @@ class G1Deploy {
       }
 
       // create threads
-      input_thread_ptr_ = CreateRecurrentThreadEx("Input", UT_CPU_ID_NONE, input_dt_ * 1e6, &G1Deploy::Input, this);
       command_writer_ptr_ = CreateRecurrentThreadEx("command_writer", UT_CPU_ID_NONE, publish_dt_ * 1e6,
                                                     &G1Deploy::LowCommandWriter, this);
-      control_thread_ptr_ =
-          CreateRecurrentThreadEx("control", UT_CPU_ID_NONE, control_dt_ * 1e6, &G1Deploy::Control, this);
-      
-      if (planner_) {
-        planner_thread_ptr_ =
-          CreateRecurrentThreadEx("planner", UT_CPU_ID_NONE, planner_dt_ * 1e6, &G1Deploy::Planner, this);
+      if (sim_lockstep_) {
+        CreateDampingCommand();
+        input_interface_->PrepareLockstepMode();
+        input_interface_->SetLockstepTokenCallback(
+            [this](const LockstepTokenBundle& bundle) {
+              lockstep_gate_.PushToken(bundle);
+            });
+        lockstep_control_thread_ = std::jthread(
+            [this](std::stop_token stop) { LockstepControlLoop(stop); });
+        std::cout << "[Lockstep] simulation-clock control thread active" << std::endl;
+      } else {
+        input_thread_ptr_ = CreateRecurrentThreadEx("Input", UT_CPU_ID_NONE, input_dt_ * 1e6, &G1Deploy::Input, this);
+        control_thread_ptr_ =
+            CreateRecurrentThreadEx("control", UT_CPU_ID_NONE, control_dt_ * 1e6, &G1Deploy::Control, this);
+        if (planner_) {
+          planner_thread_ptr_ =
+            CreateRecurrentThreadEx("planner", UT_CPU_ID_NONE, planner_dt_ * 1e6, &G1Deploy::Planner, this);
+        }
       }
           
       SetThreadPriority();
@@ -2636,6 +2656,101 @@ class G1Deploy {
       CPU_ZERO(&cpuset);
       CPU_SET(0, &cpuset);
       pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    }
+
+    void ResetLockstepSession(const LockstepEnvelope& envelope) {
+      std::cout << "[Lockstep] reset begin session=" << envelope.session
+                << " logger_size=" << (state_logger_ ? state_logger_->size() : 0)
+                << " current_frame=" << current_frame_
+                << " first_token=" << first_token_received_ << std::endl;
+      if (state_logger_) state_logger_->ResetHistoryKeepIndex();
+      if (input_interface_) input_interface_->ResetLockstepInput();
+      {
+        std::lock_guard<std::mutex> lock(current_motion_mutex_);
+        current_frame_ = 0;
+        saved_frame_for_observation_window_ = 0;
+        operator_state.play = false;
+        reinitialize_heading_ = true;
+        current_motion_ = motion_reader_.GetMotionShared(motion_reader_.current_motion_index_);
+      }
+      std::fill(token_state_data_.begin(), token_state_data_.end(), 0.0);
+      last_action.fill(0.0);
+      last_left_hand_action.fill(0.0);
+      last_right_hand_action.fill(0.0);
+      left_hand_joint_buffer_.fill(0.0);
+      right_hand_joint_buffer_.fill(0.0);
+      first_token_received_ = false;
+      last_token_time_.reset();
+      std::cout << "[Lockstep] reset end session=" << envelope.session
+                << " logger_size=" << (state_logger_ ? state_logger_->size() : 0)
+                << " current_frame=" << current_frame_
+                << " program_state=" << static_cast<int>(program_state_) << std::endl;
+    }
+
+    static bool SameLockstepBundle(
+        const LockstepTokenBundle& bundle, const LockstepEnvelope& envelope) {
+      return bundle.envelope == envelope &&
+             bundle.frame_index == static_cast<int64_t>(envelope.action_seq) &&
+             bundle.token.size() == 64;
+    }
+
+    void LockstepControlLoop(std::stop_token stop) {
+      while (!stop.stop_requested() && !operator_state.stop) {
+        auto work = lockstep_gate_.Wait(stop);
+        if (!work.has_value()) break;
+        if (work->kind == SimLockstepGate::WorkKind::SessionReady) {
+          ResetLockstepSession(work->envelope);
+          if (!lockstep_gate_.Commit(*work)) {
+            std::cerr << "[Lockstep ERROR] failed to commit session-ready ack" << std::endl;
+            operator_state.stop = true;
+            break;
+          }
+          auto committed = lockstep_gate_.LoadCommitted();
+          std::cout << "[Lockstep] commit kind=ready session=" << work->envelope.session
+                    << " step=0 action=" << LOCKSTEP_NO_ACTION
+                    << " commit_index=" << (committed ? committed->commit_index : 0)
+                    << std::endl;
+          continue;
+        }
+
+        Input();
+        if (operator_state.stop) break;
+        if (work->token.has_value()) {
+          const auto consumed = input_interface_->GetLockstepTokenBundle();
+          if (!input_interface_->IsStreamedMotionMode() ||
+              !input_interface_->HasExternalTokenState() || !consumed ||
+              !SameLockstepBundle(*consumed, work->envelope)) {
+            std::cerr << "[Lockstep ERROR] matched wire bundle was not consumed by streamed input"
+                      << " session=" << work->envelope.session
+                      << " step=" << work->envelope.sim_step
+                      << " action=" << work->envelope.action_seq << std::endl;
+            operator_state.stop = true;
+            break;
+          }
+        }
+
+        if (!ControlOnce()) {
+          std::cerr << "[Lockstep ERROR] Control failed before acknowledgement"
+                    << " session=" << work->envelope.session
+                    << " step=" << work->envelope.sim_step << std::endl;
+          operator_state.stop = true;
+          break;
+        }
+        ++lockstep_control_count_;
+        if (!lockstep_gate_.Commit(*work)) {
+          std::cerr << "[Lockstep ERROR] failed to commit completed Control" << std::endl;
+          operator_state.stop = true;
+          break;
+        }
+        auto committed = lockstep_gate_.LoadCommitted();
+        const auto state = low_state_buffer_.GetDataWithTime().data;
+        std::cout << "[Lockstep] commit kind=control session=" << work->envelope.session
+                  << " step=" << work->envelope.sim_step
+                  << " action=" << work->envelope.action_seq
+                  << " control_count=" << lockstep_control_count_
+                  << " commit_index=" << (committed ? committed->commit_index : 0)
+                  << " tick=" << (state ? state->tick() : 0) << std::endl;
+      }
     }
 
     /// DDS callback: receives a 500 Hz LowState message from the robot SDK.
@@ -2670,6 +2785,13 @@ class G1Deploy {
 
       low_state_buffer_.SetData(low_state);
 
+      if (sim_lockstep_) {
+        const auto& reserve = low_state.reserve();
+        LockstepEnvelope envelope{
+            reserve[0], reserve[1], reserve[2], reserve[3]};
+        lockstep_gate_.PushState(envelope);
+      }
+
       // update mode machine
       if (mode_machine_ != low_state.mode_machine()) {
         if (mode_machine_ == 0) std::cout << "G1 type: " << unsigned(low_state.mode_machine()) << std::endl;
@@ -2696,6 +2818,16 @@ class G1Deploy {
       dds_low_command.mode_machine() = mode_machine_;
 
       const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetDataWithTime().data;
+      std::shared_ptr<const CommittedAck> committed;
+      std::array<uint32_t, 4> ack_reserve{};
+      const std::array<uint32_t, 4>* ack_ptr = nullptr;
+      if (sim_lockstep_) {
+        committed = lockstep_gate_.LoadCommitted();
+        if (committed) {
+          ack_reserve = committed->envelope.Reserve();
+          ack_ptr = &ack_reserve;
+        }
+      }
       if (mc) {
         for (size_t i = 0; i < G1_NUM_MOTOR; i++) {
           dds_low_command.motor_cmd().at(i).mode() = 1; // 1:Enable, 0:Disable
@@ -2706,29 +2838,41 @@ class G1Deploy {
           dds_low_command.motor_cmd().at(i).kd() = mc->kd.at(i);
         }
 
+        if (ack_ptr) dds_low_command.reserve() = *ack_ptr;
+
         dds_low_command.crc() = Crc32Core((uint32_t*)&dds_low_command, (sizeof(dds_low_command) >> 2) - 1);
         lowcmd_publisher_->Write(dds_low_command);
       }
 
       // Publish Dex3 hand commands at the same publish cadence
-      dex3_hands_.writeOnce();
+      dex3_hands_.writeOnce(ack_ptr);
     }
 
     /// Gracefully stop all threads and send a damping-only command.
     void Stop() {
       operator_state.stop = true;
 
-      if (control_thread_ptr_) {
+      if (lockstep_control_thread_.joinable()) {
+        lockstep_control_thread_.request_stop();
+        lockstep_gate_.Notify();
+        lockstep_control_thread_.join();
+      }
+
+      if (input_thread_ptr_) {
         input_thread_ptr_->Wait();
         input_thread_ptr_.reset();
+      }
+      if (control_thread_ptr_) {
         control_thread_ptr_->Wait();
         control_thread_ptr_.reset();
+      }
+      if (command_writer_ptr_) {
         command_writer_ptr_->Wait();
         command_writer_ptr_.reset();
-        if (planner_thread_ptr_) {
-          planner_thread_ptr_->Wait();
-          planner_thread_ptr_.reset();
-        }
+      }
+      if (planner_thread_ptr_) {
+        planner_thread_ptr_->Wait();
+        planner_thread_ptr_.reset();
       }
       CreateDampingCommand();
       LowCommandWriter();
@@ -2804,7 +2948,7 @@ class G1Deploy {
       }
 
       auto now = std::chrono::steady_clock::now();
-      if (now - low_state_data.timestamp > LOW_STATE_ABSENT_THRESHOLD) {
+      if (!sim_lockstep_ && now - low_state_data.timestamp > LOW_STATE_ABSENT_THRESHOLD) {
         if (!quiet) std::cout << "[ERROR] Lost LowState data connection from robot!" << std::endl;
         return false;
       }
@@ -3009,7 +3153,7 @@ class G1Deploy {
       std::tie(std::ignore, upper_body_joint_velocities_buffer_) = input_interface_->GetUpperBodyJointVelocities();
 
       auto last_update_time = input_interface_->GetLastUpdateTime();
-      if (last_update_time.has_value()) {
+      if (!sim_lockstep_ && last_update_time.has_value()) {
         auto streaming_data_delay = std::chrono::steady_clock::now() - last_update_time.value();
         streaming_data_delay_rolling_stats_.push(static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(streaming_data_delay).count()));
 
@@ -3018,11 +3162,12 @@ class G1Deploy {
       }
 
       auto low_state_data = low_state_buffer_.GetDataWithTime();
-      bool low_state_late = (std::chrono::steady_clock::now() - low_state_data.timestamp) > LOW_STATE_LATE_THRESHOLD;
+      bool low_state_late = !sim_lockstep_ &&
+          (std::chrono::steady_clock::now() - low_state_data.timestamp) > LOW_STATE_LATE_THRESHOLD;
 
       audio_thread_->SetCommand(
         AudioCommand{
-          .streaming_data_absent = streaming_data_absent_debouncer_.state(),
+          .streaming_data_absent = !sim_lockstep_ && streaming_data_absent_debouncer_.state(),
           .motor_error = error_monitor_.hasErrors(),
           .low_state_late = low_state_late,
           .tts_message = std::move(pending_tts_),
@@ -3102,7 +3247,7 @@ class G1Deploy {
                 auto time_since_last = std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - last_token_time_.value());
                 
-                if (time_since_last > TOKEN_TIMEOUT_MS) {
+                if (!sim_lockstep_ && time_since_last > TOKEN_TIMEOUT_MS) {
                   static int stale_count = 0;
                   if (stale_count % 50 == 0) {  // Warn every ~1 second
                     std::cout << "⚠ [Token Safety] WARNING: No tokens received for " 
@@ -3831,14 +3976,15 @@ class G1Deploy {
      *    9. CurrentFrameAdvancement — advance playback cursor, blend planner.
      *    10. Periodic timing log every 50 ticks (~1 s).
      */
-    void Control() {
-      if (operator_state.stop) { return; }
+    bool ControlOnce() {
+      if (operator_state.stop) { return false; }
 
       switch (program_state_) {
         case ProgramState::INIT:
           if (!InitControl()) {
             std::cout << "LowState is not available, waiting for robot to be ready" << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!sim_lockstep_) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            return false;
           }
           // Re-publish robot_config so late-joining subscribers can receive it
           // before the policy is activated (ZMQ PUB has no persistence).
@@ -3859,7 +4005,7 @@ class G1Deploy {
             }
             std::cout << "[ERROR] Safety check failed, cannot start control." << std::endl;
             operator_state.stop = true;
-            break;
+            return false;
           }
 
           // Re-publish robot_config so late-joining subscribers can receive it
@@ -3888,7 +4034,7 @@ class G1Deploy {
           if (!CheckSafety()) {
             std::cout << "[ERROR] Safety check failed, stopping control." << std::endl;
             operator_state.stop = true;
-            break;
+            return false;
           }
 
           // NEW: Get data with timestamps for loop timing analysis
@@ -3900,7 +4046,7 @@ class G1Deploy {
             std::cout << "✗ Error: Failed to gather robot state to logger in the middle of the control loop!" << std::endl;
             operator_state.stop = true;
             std::cout << "Stopping control system." << std::endl;
-            return;
+            return false;
           }
 
           // Handle temperature report request (F key)
@@ -3945,7 +4091,7 @@ class G1Deploy {
           }
 
           if (!GatherInputInterfaceData()) {
-            return;
+            return false;
           }
 
           
@@ -3975,7 +4121,7 @@ class G1Deploy {
               std::cout << "✗ Error: Failed to gather observations in the middle of the control loop!" << std::endl;
               std::cout << "Stopping control system." << std::endl;
               operator_state.stop = true;
-              return;
+              return false;
             }
           } // Release lock after all observation-dependent operations
 
@@ -4004,7 +4150,7 @@ class G1Deploy {
             std::cout << "✗ Error: Failed to create policy command in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
             operator_state.stop = true;
-            return;
+            return false;
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 
@@ -4090,11 +4236,12 @@ class G1Deploy {
             (*policy_input_file_) << std::endl;
           }
 
-          if (!CurrentFrameAdvancement()) {
+          if (!(sim_lockstep_ && input_interface_->HasExternalTokenState()) &&
+              !CurrentFrameAdvancement()) {
             std::cout << "✗ Error: Failed to advance current frame in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
             operator_state.stop = true;
-            return;
+            return false;
           }
 
           if (logging_counter_ % 50 == 0) {
@@ -4137,6 +4284,11 @@ class G1Deploy {
           break;
         }
       }
+      return !operator_state.stop;
+    }
+
+    void Control() {
+      (void)ControlOnce();
     }
 };
 
@@ -4175,6 +4327,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --planner-motion-logfile <path>: write planner motion to a csv file if provided" << std::endl;
     std::cout << "  --policy-input-logfile <path>: write policy input tensors to a csv file if provided" << std::endl;
     std::cout << "  --disable-crc-check: disable CRC validation for MuJoCo simulation" << std::endl;
+    std::cout << "  --sim-lockstep: gate Control on numbered simulation boundaries (default: OFF)" << std::endl;
     std::cout << "  --obs-config <path>: specify observation configuration YAML file" << std::endl;
     std::cout << "  --encoder-file <path>: specify encoder ONNX file (optional)" << std::endl;
     std::cout << "  --planner-precision <16|32>: specify precision to run the planner model at (default: 16)" << std::endl;
@@ -4216,6 +4369,7 @@ int main(int argc, char const* argv[]) {
 
   // Parse optional arguments
   bool disableCrcCheck = false;\
+  bool simLockstep = false;
   std::string obsConfigPath = "";
   std::string encoderFile = "";
   std::string targetMotionLogfile = "";
@@ -4244,6 +4398,9 @@ int main(int argc, char const* argv[]) {
     if (std::string(argv[i]) == "--disable-crc-check") {
       disableCrcCheck = true;
       std::cout << "[INFO] CRC checking disabled for MuJoCo simulation" << std::endl;
+    } else if (std::string(argv[i]) == "--sim-lockstep") {
+      simLockstep = true;
+      std::cout << "[INFO] Simulation lockstep enabled" << std::endl;
     } else if (std::string(argv[i]) == "--obs-config") {
       if (i + 1 < argc) {
         obsConfigPath = argv[i + 1];
@@ -4481,6 +4638,15 @@ int main(int argc, char const* argv[]) {
     }
   }
 
+  if (simLockstep && inputType != "zmq_manager") {
+    std::cerr << "Error: --sim-lockstep requires --input-type zmq_manager" << std::endl;
+    return 1;
+  }
+  if (simLockstep && !plannerFile.empty()) {
+    std::cerr << "Error: --sim-lockstep does not permit a planner model" << std::endl;
+    return 1;
+  }
+
   std::cout << "[DEBUG] Creating G1Deploy object..." << std::endl;
   G1Deploy custom(
     networkInterface,
@@ -4511,7 +4677,8 @@ int main(int argc, char const* argv[]) {
     enableMotionRecording,
     initial_compliance,
     initial_max_close_ratio,
-    default_motion_name
+    default_motion_name,
+    simLockstep
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   
@@ -4538,4 +4705,3 @@ int main(int argc, char const* argv[]) {
   std::cout << "[DEBUG] Program exiting normally..." << std::endl;
   return 0;
 }
-

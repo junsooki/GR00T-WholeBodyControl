@@ -21,6 +21,7 @@
 
 #include <iostream>
 #include <algorithm>
+#include <stdexcept>
 
 using Entry = StateLogger::Entry;
 
@@ -31,7 +32,7 @@ std::optional<std::map<std::string, std::variant<std::string, int, double, bool>
   return robot_config_;
 }
 
-StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints, int num_actions, double dt_seconds, bool enable_csv, std::map<std::string, std::variant<std::string, int, double, bool>> robot_config)
+StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints, int num_actions, double dt_seconds, bool enable_csv, std::map<std::string, std::variant<std::string, int, double, bool>> robot_config, bool strict_stride)
   : dt{dt_seconds},
   csv_path_(getLogsDir(enable_csv, csv_dir)),
   capacity_(ring_capacity > 0 ? ring_capacity : 1),
@@ -39,6 +40,7 @@ StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_join
   configured_num_joints_(num_joints),
   configured_num_actions_(num_actions),
   enable_csv_(enable_csv),
+  strict_stride_(strict_stride),
 
   sink_base_quat_(enable_csv, csv_path_, "base_quat", "base_q", FileSink::HeaderType::QUATERNION),
   sink_base_ang_vel_(enable_csv, csv_path_, "base_ang_vel", "base_w", FileSink::HeaderType::XYZ),
@@ -177,6 +179,12 @@ size_t StateLogger::size() const {
   return size_;
 }
 
+void StateLogger::ResetHistoryKeepIndex() {
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  start_ = 0;
+  size_ = 0;
+}
+
 std::vector<Entry> StateLogger::GetLatest(size_t n, bool newest_first) const {
   std::lock_guard<std::mutex> lock(ring_mutex_);
   const size_t count = n < size_ ? n : size_;
@@ -232,6 +240,11 @@ std::vector<Entry> StateLogger::GetLatest(size_t n, double sample_dt_seconds, bo
       if (!newest_first) { std::reverse(out.begin(), out.end()); }
       return out;
     }
+  }
+
+  if (strict_stride_) {
+    throw std::runtime_error(
+        "StateLogger strict-stride mode forbids wall-clock timestamp fallback");
   }
 
   // Fallback: timestamp-based approximate downsampling
@@ -503,4 +516,3 @@ Entry StateLogger::makeZeroEntry_() const {
   e.token_state.clear();
   return e;
 }
-

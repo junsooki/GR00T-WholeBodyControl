@@ -34,11 +34,13 @@
 #include <queue>
 #include <memory>
 #include <optional>
+#include <functional>
 #include "../utils.hpp"              // For DataBuffer  
 #include "../robot_parameters.hpp"   // For HeadingState, OperatorState
 #include "../motion_data_reader.hpp" // For MotionDataReader, MotionSequence
 #include "../math_utils.hpp"         // For float_to_double
 #include "../localmotion_kplanner.hpp" // For PlannerState, MovementState
+#include "../sim_lockstep.hpp"
 
 /**
  * @class InputInterface
@@ -156,6 +158,23 @@ public:
       }
       return {false, {}};
     }
+
+    // Optional simulation-lockstep hooks. Non-ZMQ interfaces keep these no-op
+    // defaults, preserving every existing input path when the flag is disabled.
+    virtual std::shared_ptr<const LockstepTokenBundle> GetLockstepTokenBundle() const {
+      return nullptr;
+    }
+
+    virtual void SetLockstepTokenCallback(
+        std::function<void(const LockstepTokenBundle&)> callback) {
+      (void)callback;
+    }
+
+    virtual void ResetLockstepInput() {}
+
+    virtual bool IsStreamedMotionMode() const { return false; }
+
+    virtual void PrepareLockstepMode() {}
     
     // ------------------------------------------------------------------
     // VR 3-point tracking data accessors

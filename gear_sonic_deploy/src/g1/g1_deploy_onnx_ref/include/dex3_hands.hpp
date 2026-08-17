@@ -113,7 +113,7 @@ public:
     double GetMaxCloseRatio() const { return max_close_ratio_; }
 
     // Perform one publish tick; call this at your own cadence from the main class/thread.
-    void writeOnce()
+    void writeOnce(const std::array<uint32_t, 4> *lockstep_ack = nullptr)
     {
         constexpr double MAX_DELTA_Q = 0.25;
         // Use runtime adjustable max_close_ratio_ instead of constexpr
@@ -151,6 +151,7 @@ public:
                         smoothedCmd.motor_cmd()[i].q(current_q + clamped_delta);
                     }
                 }
+                if (lockstep_ack) smoothedCmd.reserve() = *lockstep_ack;
                 
                 left_.publisher->Write(smoothedCmd);
             }
@@ -189,6 +190,7 @@ public:
                         smoothedCmd.motor_cmd()[i].q(current_q + clamped_delta);
                     }
                 }
+                if (lockstep_ack) smoothedCmd.reserve() = *lockstep_ack;
                 
                 right_.publisher->Write(smoothedCmd);
             }

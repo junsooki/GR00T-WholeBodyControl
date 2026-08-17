@@ -66,6 +66,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
+#include <functional>
 
 #include "input_interface.hpp"
 #include "zmq_packed_message_subscriber.hpp"
@@ -581,8 +582,113 @@ public:
       }
       return last_receive_time_;
     }
+
+    std::shared_ptr<const LockstepTokenBundle> GetLockstepTokenBundle() const override {
+      return lockstep_token_buffer_.GetDataWithTime().data;
+    }
+
+    void SetLockstepTokenCallback(
+        std::function<void(const LockstepTokenBundle&)> callback) override {
+      std::lock_guard<std::mutex> lock(lockstep_callback_mutex_);
+      lockstep_callback_ = std::move(callback);
+    }
+
+    void ResetLockstepInput() override {
+      {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        has_new_data_ = false;
+        buffered_header_ = {};
+        buffered_buffers_.clear();
+      }
+      lockstep_token_buffer_.Clear();
+      external_token_state_.Clear();
+      has_external_token_state_ = false;
+      has_hand_joints_ = false;
+      ResetStreamedMotion();
+    }
+
+    bool IsStreamedMotionMode() const override { return use_zmq_stream; }
+
+    void PrepareLockstepMode() override {
+      use_zmq_stream = true;
+      has_new_data_ = false;
+      ResetStreamedMotion();
+    }
     
 private:
+    static std::optional<LockstepTokenBundle> DecodeLockstepBundle(
+        const ZMQPackedMessageSubscriber::DecodedHeader& hdr,
+        const std::vector<ZMQPackedMessageSubscriber::BufferView>& bufs) {
+      if (hdr.version != 4 || hdr.fields.size() != bufs.size()) return std::nullopt;
+      int token_idx = -1, frame_idx = -1, left_idx = -1, right_idx = -1;
+      int session_idx = -1, step_idx = -1, action_idx = -1;
+      for (size_t i = 0; i < hdr.fields.size(); ++i) {
+        const auto& name = hdr.fields[i].name;
+        if (name == "token_state") token_idx = static_cast<int>(i);
+        else if (name == "frame_index") frame_idx = static_cast<int>(i);
+        else if (name == "left_hand_joints") left_idx = static_cast<int>(i);
+        else if (name == "right_hand_joints") right_idx = static_cast<int>(i);
+        else if (name == "lockstep_session") session_idx = static_cast<int>(i);
+        else if (name == "lockstep_sim_step") step_idx = static_cast<int>(i);
+        else if (name == "lockstep_action_seq") action_idx = static_cast<int>(i);
+      }
+      if (token_idx < 0 || frame_idx < 0 || left_idx < 0 || right_idx < 0 ||
+          session_idx < 0 || step_idx < 0 || action_idx < 0) return std::nullopt;
+      const bool swap = hdr.NeedsByteSwap();
+
+      auto read_i64 = [&](int index, int64_t& output) {
+        const auto& field = hdr.fields[static_cast<size_t>(index)];
+        const auto& buffer = bufs[static_cast<size_t>(index)];
+        if (field.dtype != "i64" || field.shape != std::vector<size_t>{1} ||
+            buffer.size < sizeof(int64_t)) return false;
+        std::memcpy(&output, buffer.data, sizeof(int64_t));
+        if (swap) output = byte_swap(output);
+        return true;
+      };
+      int64_t frame = -1, session = -1, step = -1, action = -1;
+      if (!read_i64(frame_idx, frame) || !read_i64(session_idx, session) ||
+          !read_i64(step_idx, step) || !read_i64(action_idx, action)) return std::nullopt;
+      if (session <= 0 || session > UINT32_MAX || step < 0 || step >= LOCKSTEP_NO_ACTION ||
+          action < 0 || action >= LOCKSTEP_NO_ACTION) return std::nullopt;
+
+      auto read_vector = [&](int index, size_t count, auto& output) {
+        const auto& field = hdr.fields[static_cast<size_t>(index)];
+        const auto& buffer = bufs[static_cast<size_t>(index)];
+        size_t shape_count = 1;
+        for (size_t dim : field.shape) shape_count *= dim;
+        if (shape_count != count) return false;
+        if (field.dtype == "f32" && buffer.size >= count * sizeof(float)) {
+          for (size_t i = 0; i < count; ++i) {
+            float value;
+            std::memcpy(&value, static_cast<const uint8_t*>(buffer.data) + i * sizeof(float), sizeof(float));
+            if (swap) value = byte_swap(value);
+            output[i] = static_cast<double>(value);
+          }
+          return true;
+        }
+        if (field.dtype == "f64" && buffer.size >= count * sizeof(double)) {
+          for (size_t i = 0; i < count; ++i) {
+            double value;
+            std::memcpy(&value, static_cast<const uint8_t*>(buffer.data) + i * sizeof(double), sizeof(double));
+            if (swap) value = byte_swap(value);
+            output[i] = value;
+          }
+          return true;
+        }
+        return false;
+      };
+
+      LockstepTokenBundle bundle;
+      bundle.envelope = {LOCKSTEP_MAGIC, static_cast<uint32_t>(session),
+                         static_cast<uint32_t>(step), static_cast<uint32_t>(action)};
+      bundle.frame_index = frame;
+      bundle.token.resize(64);
+      if (!read_vector(token_idx, 64, bundle.token) ||
+          !read_vector(left_idx, 7, bundle.left_hand) ||
+          !read_vector(right_idx, 7, bundle.right_hand)) return std::nullopt;
+      return bundle;
+    }
+
     /// Reset the streamed motion buffer, merger state, and protocol version.
     /// Called on construction, when toggling ZMQ mode, and on safety reset.
     void ResetStreamedMotion() {
@@ -1807,6 +1913,14 @@ private:
         const ZMQPackedMessageSubscriber::DecodedHeader& hdr,
         const std::vector<ZMQPackedMessageSubscriber::BufferView>& bufs) {
         
+        auto lockstep_bundle = DecodeLockstepBundle(hdr, bufs);
+        std::function<void(const LockstepTokenBundle&)> callback;
+        if (lockstep_bundle.has_value()) {
+          lockstep_token_buffer_.SetData(*lockstep_bundle);
+          std::lock_guard<std::mutex> callback_lock(lockstep_callback_mutex_);
+          callback = lockstep_callback_;
+        }
+
         std::lock_guard<std::mutex> lock(data_mutex_);
         
         // Print message received info
@@ -1828,6 +1942,7 @@ private:
         has_new_data_ = true;
         last_receive_time_ = std::chrono::steady_clock::now();
         receive_count_++;
+        if (callback && lockstep_bundle.has_value()) callback(*lockstep_bundle);
     }
     
     // ------------------------------------------------------------------
@@ -1850,6 +1965,9 @@ private:
     bool has_new_data_ = false;               ///< True when a new message is waiting to be decoded.
     ZMQPackedMessageSubscriber::DecodedHeader buffered_header_;  ///< Latest JSON header.
     std::vector<std::vector<uint8_t>> buffered_buffers_;         ///< Copied binary field data.
+    DataBuffer<LockstepTokenBundle> lockstep_token_buffer_;
+    mutable std::mutex lockstep_callback_mutex_;
+    std::function<void(const LockstepTokenBundle&)> lockstep_callback_;
     
     // ------------------------------------------------------------------
     // Timing / diagnostics

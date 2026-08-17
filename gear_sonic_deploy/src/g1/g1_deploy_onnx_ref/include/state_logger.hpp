@@ -140,7 +140,7 @@ class StateLogger {
    * @param robot_config   Optional robot configuration map (model paths, frequencies, etc.) - immutable after construction
    */
   StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints = -1, int num_actions = -1, double dt_seconds = 0.0, bool enable_csv = true,
-              std::map<std::string, std::variant<std::string, int, double, bool>> robot_config = {});
+              std::map<std::string, std::variant<std::string, int, double, bool>> robot_config = {}, bool strict_stride = false);
 
   // Non-copyable, movable
   StateLogger(const StateLogger&) = delete;
@@ -197,6 +197,9 @@ class StateLogger {
   // If newest_first is true (default), returns [newest, ..., oldest]; otherwise [oldest, ..., newest]
   std::vector<Entry> GetLatest(size_t n, double sample_dt_seconds, bool newest_first = true) const;
 
+  /// Clear cross-session observation history while preserving the global index.
+  void ResetHistoryKeepIndex();
+
  private:
   // Time normalization helper
   double toMillisNormalized_(const std::chrono::system_clock::time_point& t);
@@ -217,6 +220,7 @@ class StateLogger {
   int configured_num_joints_ = -1;
   int configured_num_actions_ = -1;
   bool enable_csv_ = true;
+  bool strict_stride_ = false;
 
   // Ring buffer state
   mutable std::mutex ring_mutex_;
