@@ -1128,7 +1128,7 @@ class G1JointPositionLoss(nn.Module):
         ), f"coordinate_frame must be 'egocentric' or 'world', got '{coordinate_frame}'"
         self.coordinate_frame = coordinate_frame
         self._humanoid = create_humanoid(self._skeleton_name)
-        self._dof_converter = order_converter.G1Converter()
+        self._dof_converter = order_converter.get_converter(kwargs.get("robot_type", "g1"))
         if normalize:
             num_b = (
                 self._humanoid.num_bodies_augment
@@ -1227,7 +1227,7 @@ class G1JointRotationLoss(nn.Module):
         )
         self._include_extended = include_extended
         self._humanoid = create_humanoid(self._skeleton_name)
-        self._dof_converter = order_converter.G1Converter()
+        self._dof_converter = order_converter.get_converter(kwargs.get("robot_type", "g1"))
         # Normalization only makes sense for frobenius (element-wise); geodesic operates on SO(3)
         if normalize and loss_type == "frobenius":
             num_b = (
@@ -1563,7 +1563,7 @@ class G1FootContactLoss(nn.Module):
         self.contact_height_threshold = contact_height_threshold
         self.vel_threshold = vel_threshold
         self._humanoid = create_humanoid(self._skeleton_name)
-        self._dof_converter = order_converter.G1Converter()
+        self._dof_converter = order_converter.get_converter(kwargs.get("robot_type", "g1"))
         self._foot_indices = [
             self._humanoid.body_names_augment.index(name) for name in self.foot_joint_names
         ]
