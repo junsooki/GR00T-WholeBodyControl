@@ -199,7 +199,10 @@ class H2Converter(IsaacLabMuJoCoConverter):
         }
 
     VR_3POINTS_BODY_NAMES = ["torso_link", "left_wrist_pitch_link", "right_wrist_pitch_link"]
-    FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+    # H2's leg chain is knee -> ankle_roll -> ankle_pitch, the reverse of G1's.
+    # The distal body carrying the foot is therefore *_ankle_pitch_link; G1's
+    # *_ankle_roll_link resolves on H2 but points at a mid-ankle stub.
+    FOOT_BODY_NAMES = ["left_ankle_pitch_link", "right_ankle_pitch_link"]
 
 
 def load_qpos_from_csv(csv_path: str) -> torch.Tensor:
