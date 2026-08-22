@@ -1,6 +1,9 @@
 # @package _global_
 # SONIC H2 config — 3 encoders (G1/motion tracking, teleop, SMPL) for Unitree H2.
-# Based on sonic_release but targeting the H2 robot (32 bodies, 31 DOF).
+# Targets the H2 robot (32 bodies, 31 DOF), on the v1.1 recipe:
+# heading-normalised orientation, the energy-penalised reward set, and wrist
+# pose augmentation. The v1.1 *checkpoint* is G1 weights and cannot warm-start
+# H2, so only the recipe carries over.
 
 defaults:
   - /algo: ppo_im_phc
@@ -10,12 +13,12 @@ defaults:
   - /aux_losses: universal_token/g1_recon_and_all_latent
   - override /trainer: trl_ppo_aux
   - override /actor_critic: universal_token/all_mlp_v1
-  - override /manager_env/observations/tokenizer: unitoken_all_noz
+  - override /manager_env/observations/tokenizer: unitoken_all_noz_heading
   - override /manager_env/observations/policy: local_dir_hist
   - override /manager_env/observations/critic: privileged_mf_hist
   - override /manager_env/events: tracking/level0_4
   - override /manager_env/terminations: tracking/base_adaptive_strict_ori_foot_xyz
-  - override /manager_env/rewards: tracking/base_5point_local_feet_acc
+  - override /manager_env/rewards: tracking/local_feet_acc_energy_5pt
 
 use_manager_env: true
 
@@ -72,7 +75,7 @@ manager_env:
   commands:
     motion:
       reward_point_body: ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
-      reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, -0.0, 0.0], [0.0, -0.0, 0.0]]
+      reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
       # 14 tracked bodies; feet corrected to H2's distal ankle body (see above).
       # Every entry of reward_point_body must also appear here -- commands.py:158
       # does body_names.index(name) and raises otherwise.
@@ -101,6 +104,10 @@ manager_env:
 
       freeze_frame_aug: true
       teleop_sample_prob_when_smpl: 0.5
+      randomize_wrist_poses: true
+      # motion_lib defaults these to G1's 29-DOF layout (19-21/26-28), which on
+      # H2's 31-DOF order is shoulder_yaw and elbow. H2's wrists live here.
+      wrist_mujoco_dof_indices: [21, 22, 23, 28, 29, 30]
 
       motion_lib_cfg:
         adaptive_sampling:
@@ -124,25 +131,25 @@ algo:
         reencode_smpl_g1_recon: true
         encoders:
           g1:
-            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_b_mf_nonflat"]
+            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
           teleop:
             inputs:
               [
                 "command_multi_future_lower_body",
                 "vr_3point_local_target",
                 "vr_3point_local_orn_target",
-                "motion_anchor_ori_b",
+                "motion_anchor_ori_heading",
               ]
           smpl:
             inputs:
               [
                 "smpl_joints_multi_future_local_nonflat",
-                "smpl_root_ori_b_multi_future",
+                "smpl_root_ori_heading_multi_future",
                 "joint_pos_multi_future_wrist_for_smpl",
               ]
         decoders:
           g1_kin:
-            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_b_mf_nonflat"]
+            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
 
     critic:
       backbone:

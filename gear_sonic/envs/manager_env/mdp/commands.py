@@ -225,6 +225,7 @@ class TrackingCommand(CommandTerm):
                 "randomize_wrist_poses": self.cfg.randomize_wrist_poses,
                 "randomize_wrist_prob": self.cfg.randomize_wrist_prob,
                 "randomize_wrist_std": self.cfg.randomize_wrist_std,
+                "wrist_mujoco_dof_indices": self.cfg.wrist_mujoco_dof_indices,
             }
         )
 
@@ -4211,6 +4212,9 @@ class TrackingCommandCfg(CommandTermCfg):
     cat_upper_body_poses: bool = False
     cat_upper_body_poses_prob: float = 0.5
     randomize_wrist_poses: bool = False
+    # MuJoCo DOF indices of the wrist joints, which differ per robot (G1 29-DOF:
+    # 19-21/26-28, H2 31-DOF: 21-23/28-30). None keeps motion_lib's G1 default.
+    wrist_mujoco_dof_indices: list[int] | None = None
     randomize_wrist_prob: float = 0.3
     randomize_wrist_std: float = 0.1  # radians (~5.7 degrees)
 
