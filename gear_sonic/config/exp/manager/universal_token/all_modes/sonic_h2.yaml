@@ -38,13 +38,6 @@ critic_actions_history_length: 10
 
 manager_env:
   rewards:
-    # This term measures wrist orientation in the root frame, i.e. the composed
-    # error of shoulder(3) + elbow(1) + wrist(3). std 0.1 rad (5.7 deg) asks the
-    # whole arm to be near-perfect; H2 sits at ~15.7 deg, which is exp(-7.6) --
-    # no usable gradient. Every other orientation term here uses 0.4.
-    tracking_vr_2wrists_local_ori:
-      params:
-        std: 0.3
     feet_acc:
       weight: -2.5e-6
     # G1 has a single head link; H2 splits the head into head_pitch_link /
