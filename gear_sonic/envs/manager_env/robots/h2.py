@@ -22,7 +22,6 @@ DAMPING_7520_14 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ
 DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
 
-H2_ISAACLAB_TO_MUJOCO_MAPPING = {}
 
 H2_ISAACLAB_JOINTS = [
     "pelvis",
@@ -242,6 +241,10 @@ H2_CFG = ArticulationCfg(
         joint_vel={".*": 0.0},
     ),
     soft_joint_pos_limit_factor=0.9,
+    # Effort and velocity limits are taken from H2's own URDF (mjcf agrees). The
+    # values these replaced were G1's scaled by a flat 3x, which disagreed with
+    # the real hardware -- worst at ankle_roll, 150 Nm configured against 19 Nm
+    # actual, letting the policy lean on balance torque the robot does not have.
     actuators={
         "legs": ImplicitActuatorCfg(
             joint_names_expr=[
@@ -251,13 +254,13 @@ H2_CFG = ArticulationCfg(
                 ".*_knee_joint",
             ],
             effort_limit_sim={
-                ".*_hip_yaw_joint": 264.0,
-                ".*_hip_roll_joint": 417.0,
-                ".*_hip_pitch_joint": 417.0,
-                ".*_knee_joint": 417.0,
+                ".*_hip_yaw_joint": 360.0,
+                ".*_hip_roll_joint": 360.0,
+                ".*_hip_pitch_joint": 360.0,
+                ".*_knee_joint": 360.0,
             },
             velocity_limit_sim={
-                ".*_hip_yaw_joint": 32.0,
+                ".*_hip_yaw_joint": 20.0,
                 ".*_hip_roll_joint": 20.0,
                 ".*_hip_pitch_joint": 20.0,
                 ".*_knee_joint": 20.0,
@@ -282,32 +285,40 @@ H2_CFG = ArticulationCfg(
             },
         ),
         "feet": ImplicitActuatorCfg(
-            effort_limit_sim=150.0,
-            velocity_limit_sim=37.0,
+            # ankle_roll is a far smaller actuator than ankle_pitch (19 vs 66.88 Nm),
+            # so these cannot share a scalar limit.
+            effort_limit_sim={
+                ".*_ankle_pitch_joint": 66.88,
+                ".*_ankle_roll_joint": 19.0,
+            },
+            velocity_limit_sim={
+                ".*_ankle_pitch_joint": 28.61,
+                ".*_ankle_roll_joint": 100.70,
+            },
             joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
             armature=2.0 * ARMATURE_5020,
         ),
         "waist": ImplicitActuatorCfg(
-            effort_limit_sim=150.0,
-            velocity_limit_sim=37.0,
+            effort_limit_sim=180.0,
+            velocity_limit_sim=28.375,
             joint_names_expr=["waist_roll_joint", "waist_pitch_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
             armature=2.0 * ARMATURE_5020,
         ),
         "waist_yaw": ImplicitActuatorCfg(
-            effort_limit_sim=264.0,
-            velocity_limit_sim=32.0,
+            effort_limit_sim=120.0,
+            velocity_limit_sim=28.375,
             joint_names_expr=["waist_yaw_joint"],
             stiffness=STIFFNESS_7520_14,
             damping=DAMPING_7520_14,
             armature=ARMATURE_7520_14,
         ),
         "head": ImplicitActuatorCfg(
-            effort_limit_sim=150.0,
-            velocity_limit_sim=37.0,
+            effort_limit_sim=50.0,
+            velocity_limit_sim=10.0,
             joint_names_expr=["head_pitch_joint", "head_yaw_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
@@ -324,22 +335,22 @@ H2_CFG = ArticulationCfg(
                 ".*_wrist_yaw_joint",
             ],
             effort_limit_sim={
-                ".*_shoulder_pitch_joint": 75.0,
-                ".*_shoulder_roll_joint": 75.0,
-                ".*_shoulder_yaw_joint": 75.0,
-                ".*_elbow_joint": 75.0,
-                ".*_wrist_roll_joint": 75.0,
-                ".*_wrist_pitch_joint": 15.0,
-                ".*_wrist_yaw_joint": 15.0,
+                ".*_shoulder_pitch_joint": 120.0,
+                ".*_shoulder_roll_joint": 54.0,
+                ".*_shoulder_yaw_joint": 54.0,
+                ".*_elbow_joint": 54.0,
+                ".*_wrist_roll_joint": 54.0,
+                ".*_wrist_pitch_joint": 25.0,
+                ".*_wrist_yaw_joint": 25.0,
             },
             velocity_limit_sim={
-                ".*_shoulder_pitch_joint": 37.0,
-                ".*_shoulder_roll_joint": 37.0,
-                ".*_shoulder_yaw_joint": 37.0,
-                ".*_elbow_joint": 37.0,
-                ".*_wrist_roll_joint": 37.0,
-                ".*_wrist_pitch_joint": 22.0,
-                ".*_wrist_yaw_joint": 22.0,
+                ".*_shoulder_pitch_joint": 28.375,
+                ".*_shoulder_roll_joint": 34.30,
+                ".*_shoulder_yaw_joint": 34.30,
+                ".*_elbow_joint": 34.30,
+                ".*_wrist_roll_joint": 34.30,
+                ".*_wrist_pitch_joint": 50.125,
+                ".*_wrist_yaw_joint": 50.125,
             },
             stiffness={
                 ".*_shoulder_pitch_joint": STIFFNESS_5020,
@@ -385,3 +396,4 @@ for a in H2_CFG.actuators.values():
     for n in names:
         if n in e and n in s and s[n]:
             H2_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
+
