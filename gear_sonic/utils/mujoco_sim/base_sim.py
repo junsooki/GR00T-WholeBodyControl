@@ -191,6 +191,8 @@ class DefaultEnv:
                     self.band_attached_link = self.mj_model.body("torso_link").id
             elif "h1" in self.config["ROBOT_TYPE"]:
                 self.band_attached_link = self.mj_model.body("torso_link").id
+            elif "h2" in self.config["ROBOT_TYPE"]:
+                self.band_attached_link = self.mj_model.body("pelvis").id
             else:
                 self.band_attached_link = self.mj_model.body("base_link").id
 
@@ -230,7 +232,7 @@ class DefaultEnv:
             if any(
                 [
                     part_name in name
-                    for part_name in ["hip", "knee", "ankle", "waist", "shoulder", "elbow", "wrist"]
+                    for part_name in ["hip", "knee", "ankle", "waist", "shoulder", "elbow", "wrist", "head"]
                 ]
             ):
                 self.body_joint_index.append(i)
