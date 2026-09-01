@@ -84,7 +84,7 @@ W = 2.0 * np.pi * 10.0
 
 def action_scales_mj(joint_names_mj):
     """action_scale = 0.25 * effort / stiffness, in MuJoCo joint order."""
-    gains, consts = load(joint_names_mj)
+    gains, consts, _vel = load(joint_names_mj)
     out = np.zeros(len(joint_names_mj), dtype=np.float32)
     for i, name in enumerate(joint_names_mj):
         family, effort, mult = gains[joint_kind(name)]

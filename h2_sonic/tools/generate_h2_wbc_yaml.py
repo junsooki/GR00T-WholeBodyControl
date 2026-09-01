@@ -16,6 +16,7 @@ Requires: mujoco (and the H2 meshes present, see setup.sh).
 """
 
 import argparse
+import sys
 import math
 import os
 import re
@@ -55,20 +56,13 @@ GAIN_TABLE = [
     (r".*_wrist_(pitch|yaw)_joint", 1.0, ARMATURE_4010),
 ]
 
-# velocity_limit_sim per robots/h2.py
-VEL_TABLE = [
-    (r".*_hip_yaw_joint", 32.0),
-    (r".*_hip_(roll|pitch)_joint", 20.0),
-    (r".*_knee_joint", 20.0),
-    (r".*_ankle_(pitch|roll)_joint", 37.0),
-    (r"waist_yaw_joint", 32.0),
-    (r"waist_(roll|pitch)_joint", 37.0),
-    (r"head_(pitch|yaw)_joint", 37.0),
-    (r".*_(shoulder_(pitch|roll|yaw)|elbow|wrist_roll)_joint", 37.0),
-    (r".*_wrist_(pitch|yaw)_joint", 22.0),
-]
+# Velocity limits come from h2_gains, which parses robots/h2.py. This file used
+# to carry a VEL_TABLE transcribed by hand; it went stale (head 37 -> 10, wrist
+# pitch/yaw 22 -> 50.125, hip_yaw 32 -> 20, ...) and its single ankle entry could
+# not represent roll and pitch having different limits (100.70 vs 28.61).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from h2_gains import load as _load_gains  # noqa: E402
 
-# H2_CFG.init_state.joint_pos per robots/h2.py
 DEFAULT_ANGLES = [
     (r".*_hip_pitch_joint", -0.312),
     (r".*_knee_joint", 0.669),
@@ -143,12 +137,13 @@ def main():
     assert n == 31, f"expected 31 actuated joints, got {n}"
 
     names = [j["name"] for j in joints]
+    _, _, vel_by_joint = _load_gains(names)
     kp_list, kd_list, vel_list, default_list = [], [], [], []
     for name in names:
         mult, armature = lookup(GAIN_TABLE, name)
         kp_list.append(round(mult * kp(armature), 4))
         kd_list.append(round(mult * kd(armature), 4))
-        vel_list.append(lookup(VEL_TABLE, name)[0])
+        vel_list.append(vel_by_joint[name])
         angle = 0.0
         for pattern, val in DEFAULT_ANGLES:
             if re.fullmatch(pattern, name):

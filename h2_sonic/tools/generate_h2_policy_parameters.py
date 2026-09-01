@@ -68,7 +68,7 @@ N = 31
 
 from h2_gains import KINDS, joint_kind, load  # noqa: F401
 
-GAINS, _H2_CONSTS = load(MUJOCO_JOINTS)
+GAINS, _H2_CONSTS, _H2_VEL = load(MUJOCO_JOINTS)
 
 DEFAULT_ANGLES = {
     "hip_pitch": -0.312, "knee": 0.669, "ankle_pitch": -0.363, "elbow": 0.6,

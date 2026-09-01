@@ -90,10 +90,13 @@ def _module_constants(tree):
 
 
 def load(mujoco_joints):
-    """Return (gains, constants).
+    """Return (gains, constants, velocity).
 
     gains: {joint_kind: (family, effort_limit, stiffness_multiplier)}
     constants: module-level numeric constants from h2.py (ARMATURE_*, STIFFNESS_*, ...)
+    velocity: {joint_name: velocity_limit_sim} -- per joint, not per kind, because
+        h2.py gives ankle roll and pitch different limits (100.70 vs 28.61) and a
+        kind-keyed table cannot represent that.
     """
     tree = ast.parse(open(H2_PY).read())
     consts = _module_constants(tree)
@@ -106,13 +109,14 @@ def load(mujoco_joints):
         if names is None:
             continue
         groups.append(([e.value for e in names.elts],
-                       _kwarg(node, "effort_limit_sim"), _kwarg(node, "stiffness")))
+                       _kwarg(node, "effort_limit_sim"), _kwarg(node, "stiffness"),
+                       _kwarg(node, "velocity_limit_sim")))
     if not groups:
         raise SystemExit(f"no ImplicitActuatorCfg found in {H2_PY}")
 
-    gains = {}
+    gains, vel = {}, {}
     for joint in mujoco_joints:
-        for pats, eff_n, stiff_n in groups:
+        for pats, eff_n, stiff_n, vel_n in groups:
             if not any(re.fullmatch(p, joint) for p in pats):
                 continue
             eff, stiff = _resolve(eff_n, joint), _resolve(stiff_n, joint)
@@ -126,7 +130,10 @@ def load(mujoco_joints):
             if kind in gains and gains[kind] != cur:
                 raise SystemExit(f"joint kind '{kind}' inconsistent: {gains[kind]} vs {cur}")
             gains[kind] = cur
+            v = _resolve(vel_n, joint)
+            if v is not None:
+                vel[joint] = float(v)
             break
         else:
             raise SystemExit(f"no actuator group in h2.py matches joint '{joint}'")
-    return gains, consts
+    return gains, consts, vel
