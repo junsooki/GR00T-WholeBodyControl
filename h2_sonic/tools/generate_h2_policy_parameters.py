@@ -18,6 +18,9 @@ Usage:
 
 import argparse
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ---- verbatim from gear_sonic/envs/manager_env/robots/h2.py ----------------
 H2_ISAACLAB_TO_MUJOCO_DOF = [
@@ -63,29 +66,9 @@ MUJOCO_JOINTS = [
 ]
 N = 31
 
-# (stiffness constant expr, damping constant expr, effort_limit_sim, multiplier)
-# straight from H2_CFG.actuators in robots/h2.py; effort limits here are the
-# TRAINING values (used for action_scale), not the MJCF clip values.
-GAINS = {
-    "hip_pitch": ("7520_22", 417.0, 1.0),
-    "hip_roll": ("7520_22", 417.0, 1.0),
-    "hip_yaw": ("7520_14", 264.0, 1.0),
-    "knee": ("7520_22", 417.0, 1.0),
-    "ankle_roll": ("5020", 150.0, 2.0),
-    "ankle_pitch": ("5020", 150.0, 2.0),
-    "waist_yaw": ("7520_14", 264.0, 1.0),
-    "waist_roll": ("5020", 150.0, 2.0),
-    "waist_pitch": ("5020", 150.0, 2.0),
-    "head_pitch": ("5020", 150.0, 2.0),
-    "head_yaw": ("5020", 150.0, 2.0),
-    "shoulder_pitch": ("5020", 75.0, 1.0),
-    "shoulder_roll": ("5020", 75.0, 1.0),
-    "shoulder_yaw": ("5020", 75.0, 1.0),
-    "elbow": ("5020", 75.0, 1.0),
-    "wrist_roll": ("5020", 75.0, 1.0),
-    "wrist_pitch": ("4010", 15.0, 1.0),
-    "wrist_yaw": ("4010", 15.0, 1.0),
-}
+from h2_gains import KINDS, joint_kind, load  # noqa: F401
+
+GAINS, _H2_CONSTS = load(MUJOCO_JOINTS)
 
 DEFAULT_ANGLES = {
     "hip_pitch": -0.312, "knee": 0.669, "ankle_pitch": -0.363, "elbow": 0.6,
@@ -94,13 +77,6 @@ SIDE_ANGLES = {
     "left_shoulder_roll_joint": 0.2, "left_shoulder_pitch_joint": 0.2,
     "right_shoulder_roll_joint": -0.2, "right_shoulder_pitch_joint": 0.2,
 }
-
-
-def joint_kind(name):
-    for kind in GAINS:
-        if kind in name:
-            return kind
-    raise KeyError(name)
 
 
 def default_angle(name):

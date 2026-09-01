@@ -35,6 +35,8 @@ Usage:
 """
 
 import argparse
+import sys
+import os
 import collections
 import time
 
@@ -70,26 +72,25 @@ MUJOCO_TO_ISAACLAB = np.array([
     16, 18, 25, 5, 11, 19, 26, 20, 27, 21, 28, 22, 29, 23, 30,
 ])
 
-# action_scale = 0.25 * training_effort_limit / stiffness, per joint KIND
-# (constants from robots/h2.py; joint kinds resolved per MuJoCo-order name)
-ARMATURE = {"5020": 0.003609725, "7520_14": 0.010177520, "7520_22": 0.025101925, "4010": 0.00425}
+# Per-joint gains come from h2_gains, which parses robots/h2.py. This file used
+# to carry its own transcribed KIND_TABLE; it went stale against the corrected
+# effort limits, and its single "ankle" entry could not represent ankle roll and
+# pitch having different limits (19 vs 66.88 N.m) at all.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from h2_gains import joint_kind, load  # noqa: E402
+
 W = 2.0 * np.pi * 10.0
-KIND_TABLE = [  # (substring, armature key, gain multiplier, training effort limit)
-    ("hip_pitch", "7520_22", 1.0, 417.0), ("hip_roll", "7520_22", 1.0, 417.0),
-    ("hip_yaw", "7520_14", 1.0, 264.0), ("knee", "7520_22", 1.0, 417.0),
-    ("ankle", "5020", 2.0, 150.0), ("waist_yaw", "7520_14", 1.0, 264.0),
-    ("waist", "5020", 2.0, 150.0), ("head", "5020", 2.0, 150.0),
-    ("wrist_pitch", "4010", 1.0, 15.0), ("wrist_yaw", "4010", 1.0, 15.0),
-    ("shoulder", "5020", 1.0, 75.0), ("elbow", "5020", 1.0, 75.0),
-    ("wrist_roll", "5020", 1.0, 75.0),
-]
 
 
-def joint_kind(name):
-    for sub, arm, mult, eff in KIND_TABLE:
-        if sub in name:
-            return arm, mult, eff
-    raise KeyError(name)
+def action_scales_mj(joint_names_mj):
+    """action_scale = 0.25 * effort / stiffness, in MuJoCo joint order."""
+    gains, consts = load(joint_names_mj)
+    out = np.zeros(len(joint_names_mj), dtype=np.float32)
+    for i, name in enumerate(joint_names_mj):
+        family, effort, mult = gains[joint_kind(name)]
+        kp = mult * consts[f"ARMATURE_{family}"] * W * W
+        out[i] = 0.25 * effort / kp
+    return out
 
 
 def quat_rotate_inv(q_wxyz, v):
@@ -125,12 +126,7 @@ class H2PolicyRunner:
         self.mode = mode
         self.anchor_pitch = np.deg2rad(anchor_pitch_deg)
 
-        scale_mj = np.zeros(self.n, dtype=np.float32)
-        for i, name in enumerate(joint_names_mj):
-            arm, mult, eff = joint_kind(name)
-            kp = mult * ARMATURE[arm] * W * W
-            scale_mj[i] = 0.25 * eff / kp
-        self.action_scale_il = scale_mj[MUJOCO_TO_ISAACLAB]
+        self.action_scale_il = action_scales_mj(joint_names_mj)[MUJOCO_TO_ISAACLAB]
 
         self.sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         in_meta = self.sess.get_inputs()[0]
