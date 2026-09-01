@@ -94,36 +94,9 @@ class IsaacLabMuJoCoConverter(ABC):
         return len(self.DOF_MAPPINGS[(self.VALID_DOF_ORDERS[0], self.VALID_DOF_ORDERS[1])])
 
 
-class G1Converter(IsaacLabMuJoCoConverter):
-    """G1 ordering converter.
-
-    Imports G1 body/DOF/joint mappings from gear_sonic.envs.manager_env.robots.g1.
-    """
-
-    def __init__(self):
-        # Lazy import to avoid circular dependency:
-        # order_converter -> g1 -> mdp/__init__ -> commands -> order_converter
-        from gear_sonic.envs.manager_env.robots.g1 import (
-            G1_ISAACLAB_JOINTS,
-            G1_ISAACLAB_TO_MUJOCO_BODY,
-            G1_ISAACLAB_TO_MUJOCO_DOF,
-            G1_MUJOCO_TO_ISAACLAB_BODY,
-            G1_MUJOCO_TO_ISAACLAB_DOF,
-        )
-
-        self.JOINT_NAMES = G1_ISAACLAB_JOINTS
-        self.DOF_MAPPINGS = {
-            ("isaaclab", "mujoco"): G1_ISAACLAB_TO_MUJOCO_DOF,
-            ("mujoco", "isaaclab"): G1_MUJOCO_TO_ISAACLAB_DOF,
-        }
-        self.BODY_MAPPINGS = {
-            ("isaaclab", "mujoco"): G1_ISAACLAB_TO_MUJOCO_BODY,
-            ("mujoco", "isaaclab"): G1_MUJOCO_TO_ISAACLAB_BODY,
-        }
-
-    # Body subset names for MPJPE metrics (used by reconstruction_trainer)
-    VR_3POINTS_BODY_NAMES = ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
-    FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+    # Per-robot body subsets; overridden by each subclass.
+    VR_3POINTS_BODY_NAMES: list = []
+    FOOT_BODY_NAMES: list = []
 
     @property
     def vr_3points_mujoco_indices(self):
@@ -176,6 +149,38 @@ class G1Converter(IsaacLabMuJoCoConverter):
         }
 
 
+class G1Converter(IsaacLabMuJoCoConverter):
+    """G1 ordering converter.
+
+    Imports G1 body/DOF/joint mappings from gear_sonic.envs.manager_env.robots.g1.
+    """
+
+    def __init__(self):
+        # Lazy import to avoid circular dependency:
+        # order_converter -> g1 -> mdp/__init__ -> commands -> order_converter
+        from gear_sonic.envs.manager_env.robots.g1 import (
+            G1_ISAACLAB_JOINTS,
+            G1_ISAACLAB_TO_MUJOCO_BODY,
+            G1_ISAACLAB_TO_MUJOCO_DOF,
+            G1_MUJOCO_TO_ISAACLAB_BODY,
+            G1_MUJOCO_TO_ISAACLAB_DOF,
+        )
+
+        self.JOINT_NAMES = G1_ISAACLAB_JOINTS
+        self.DOF_MAPPINGS = {
+            ("isaaclab", "mujoco"): G1_ISAACLAB_TO_MUJOCO_DOF,
+            ("mujoco", "isaaclab"): G1_MUJOCO_TO_ISAACLAB_DOF,
+        }
+        self.BODY_MAPPINGS = {
+            ("isaaclab", "mujoco"): G1_ISAACLAB_TO_MUJOCO_BODY,
+            ("mujoco", "isaaclab"): G1_MUJOCO_TO_ISAACLAB_BODY,
+        }
+
+    # Body subset names for MPJPE metrics (used by reconstruction_trainer)
+    VR_3POINTS_BODY_NAMES = ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
+    FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+
+
 class H2Converter(IsaacLabMuJoCoConverter):
     """H2 robot joint/body order converter between IsaacLab and MuJoCo conventions."""
 
@@ -199,7 +204,49 @@ class H2Converter(IsaacLabMuJoCoConverter):
         }
 
     VR_3POINTS_BODY_NAMES = ["torso_link", "left_wrist_pitch_link", "right_wrist_pitch_link"]
-    FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+    # H2's leg chain is knee -> ankle_roll -> ankle_pitch, the reverse of G1's.
+    # The distal body carrying the foot is therefore *_ankle_pitch_link; G1's
+    # *_ankle_roll_link resolves on H2 but points at a mid-ankle stub.
+    FOOT_BODY_NAMES = ["left_ankle_pitch_link", "right_ankle_pitch_link"]
+
+
+_CONVERTERS = {
+    "g1": G1Converter,
+    "g1_model_12_dex": G1Converter,
+    "unitree_g1": G1Converter,
+    "h2": H2Converter,
+}
+
+
+def get_converter(robot_type: str = "g1"):
+    """Return the IsaacLab<->MuJoCo converter for a robot type.
+
+    Defaults to G1 so existing call sites are unchanged. H2 has 31 DOF / 32
+    bodies against G1's 29 / 30, so using the wrong converter silently
+    scrambles joint and body ordering rather than raising.
+    """
+    key = (robot_type or "g1").lower()
+    if key not in _CONVERTERS:
+        raise ValueError(
+            f"No order converter for robot type {robot_type!r}. "
+            f"Known: {sorted(_CONVERTERS)}"
+        )
+    return _CONVERTERS[key]()
+
+
+def infer_robot_type(asset_file_name: str | None, default: str = "g1") -> str:
+    """Best-effort robot type from an MJCF filename (e.g. 'h2.xml' -> 'h2').
+
+    Used where the robot is not passed explicitly but the motion-lib asset is.
+    """
+    if not asset_file_name:
+        return default
+    stem = str(asset_file_name).rsplit("/", 1)[-1].lower()
+    if stem.startswith("h2"):
+        return "h2"
+    if stem.startswith("g1"):
+        return "g1"
+    return default
 
 
 def load_qpos_from_csv(csv_path: str) -> torch.Tensor:

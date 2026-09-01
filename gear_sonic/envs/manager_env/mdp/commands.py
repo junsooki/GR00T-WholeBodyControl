@@ -225,6 +225,7 @@ class TrackingCommand(CommandTerm):
                 "randomize_wrist_poses": self.cfg.randomize_wrist_poses,
                 "randomize_wrist_prob": self.cfg.randomize_wrist_prob,
                 "randomize_wrist_std": self.cfg.randomize_wrist_std,
+                "wrist_mujoco_dof_indices": self.cfg.wrist_mujoco_dof_indices,
             }
         )
 
@@ -613,7 +614,15 @@ class TrackingCommand(CommandTerm):
         # Inject body/DOF mapping into motion_lib_cfg so motion_lib handles
         # body reordering and xyzw→wxyz quaternion conversion at load time.
 
-        isaaclab_to_mujoco_mapping = order_converter.G1Converter().get_isaaclab_to_mujoco_mapping()
+        # Robot type is not passed here, but motion_lib_cfg carries the MJCF
+        # it will load; H2 has 31 DOF / 32 bodies against G1's 29 / 30, so the
+        # wrong converter silently scrambles ordering rather than raising.
+        _robot_type = order_converter.infer_robot_type(
+            (motion_lib_cfg.get("asset", {}) or {}).get("assetFileName")
+        )
+        isaaclab_to_mujoco_mapping = order_converter.get_converter(
+            _robot_type
+        ).get_isaaclab_to_mujoco_mapping()
         motion_lib_cfg.update(
             {
                 "mujoco_to_isaaclab_body": isaaclab_to_mujoco_mapping["mujoco_to_isaaclab_body"],
@@ -4203,6 +4212,9 @@ class TrackingCommandCfg(CommandTermCfg):
     cat_upper_body_poses: bool = False
     cat_upper_body_poses_prob: float = 0.5
     randomize_wrist_poses: bool = False
+    # MuJoCo DOF indices of the wrist joints, which differ per robot (G1 29-DOF:
+    # 19-21/26-28, H2 31-DOF: 21-23/28-30). None keeps motion_lib's G1 default.
+    wrist_mujoco_dof_indices: list[int] | None = None
     randomize_wrist_prob: float = 0.3
     randomize_wrist_std: float = 0.1  # radians (~5.7 degrees)
 

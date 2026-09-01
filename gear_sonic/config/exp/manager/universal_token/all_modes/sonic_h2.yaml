@@ -1,6 +1,9 @@
 # @package _global_
 # SONIC H2 config — 3 encoders (G1/motion tracking, teleop, SMPL) for Unitree H2.
-# Based on sonic_release but targeting the H2 robot (32 bodies, 31 DOF).
+# Targets the H2 robot (32 bodies, 31 DOF), on the v1.1 recipe:
+# heading-normalised orientation, the energy-penalised reward set, and wrist
+# pose augmentation. The v1.1 *checkpoint* is G1 weights and cannot warm-start
+# H2, so only the recipe carries over.
 
 defaults:
   - /algo: ppo_im_phc
@@ -10,12 +13,12 @@ defaults:
   - /aux_losses: universal_token/g1_recon_and_all_latent
   - override /trainer: trl_ppo_aux
   - override /actor_critic: universal_token/all_mlp_v1
-  - override /manager_env/observations/tokenizer: unitoken_all_noz
+  - override /manager_env/observations/tokenizer: unitoken_all_noz_heading
   - override /manager_env/observations/policy: local_dir_hist
   - override /manager_env/observations/critic: privileged_mf_hist
   - override /manager_env/events: tracking/level0_4
   - override /manager_env/terminations: tracking/base_adaptive_strict_ori_foot_xyz
-  - override /manager_env/rewards: tracking/base_5point_local_feet_acc
+  - override /manager_env/rewards: tracking/local_feet_acc_energy_5pt
 
 use_manager_env: true
 
@@ -37,6 +40,34 @@ manager_env:
   rewards:
     feet_acc:
       weight: -2.5e-6
+    # G1 has a single head link; H2 splits the head into head_pitch_link /
+    # head_yaw_link, so the default term's body name does not resolve.
+    anti_shake_ang_vel:
+      params:
+        body_names: ["left_wrist_yaw_link", "right_wrist_yaw_link", "head_yaw_link"]
+    # H2's leg chain is knee -> ankle_roll -> ankle_pitch, the reverse of G1's,
+    # so the body carrying the foot is *_ankle_pitch_link. G1's *_ankle_roll_link
+    # resolves on H2 but is a mid-ankle stub, so the default regex would leave the
+    # real foot penalised for ground contact.
+    undesired_contacts:
+      params:
+        sensor_cfg:
+          _target_: isaaclab.managers.SceneEntityCfg
+          name: "contact_forces"
+          body_names:
+            - "^(?!left_ankle_pitch_link$)(?!right_ankle_pitch_link$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$)(?!left_elbow_link$)(?!right_elbow_link$).+$"
+  terminations:
+    # Same ankle-ordering fix: track the foot, not the mid-ankle.
+    foot_pos_xyz:
+      params:
+        body_names: ["left_ankle_pitch_link", "right_ankle_pitch_link"]
+    ee_body_pos:
+      params:
+        body_names:
+          - "left_ankle_pitch_link"
+          - "right_ankle_pitch_link"
+          - "left_wrist_yaw_link"
+          - "right_wrist_yaw_link"
   config:
     robot:
       type: h2
@@ -44,7 +75,26 @@ manager_env:
   commands:
     motion:
       reward_point_body: ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
-      reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, -0.0, 0.0], [0.0, -0.0, 0.0]]
+      reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+      # 14 tracked bodies; feet corrected to H2's distal ankle body (see above).
+      # Every entry of reward_point_body must also appear here -- commands.py:158
+      # does body_names.index(name) and raises otherwise.
+      body_names: [
+        "pelvis",
+        "left_hip_roll_link",
+        "left_knee_link",
+        "left_ankle_pitch_link",
+        "right_hip_roll_link",
+        "right_knee_link",
+        "right_ankle_pitch_link",
+        "torso_link",
+        "left_shoulder_roll_link",
+        "left_elbow_link",
+        "left_wrist_yaw_link",
+        "right_shoulder_roll_link",
+        "right_elbow_link",
+        "right_wrist_yaw_link",
+      ]
       num_future_frames: 10
       dt_future_ref_frames: 0.1
       smpl_num_future_frames: 10
@@ -54,12 +104,20 @@ manager_env:
 
       freeze_frame_aug: true
       teleop_sample_prob_when_smpl: 0.5
+      randomize_wrist_poses: true
+      # motion_lib defaults these to G1's 29-DOF layout (19-21/26-28), which on
+      # H2's 31-DOF order is shoulder_yaw and elbow. H2's wrists live here.
+      wrist_mujoco_dof_indices: [21, 22, 23, 28, 29, 30]
 
       motion_lib_cfg:
         adaptive_sampling:
           adp_samp_failure_rate_max_over_mean: 200
         motion_file: null
-        smpl_motion_file: dummy
+        # NVIDIA's pre-computed Bones-SEED SMPL, matched to our motion keys. The
+        # shipped H2 config used "dummy", which leaves smpl_data_keys empty so
+        # motion_has_smpl is False everywhere and the SMPL encoder -- one of this
+        # config's three -- never trains.
+        smpl_motion_file: data/smpl_filtered
         smpl_y_up: true
         asset:
           assetFileName: "h2.xml"
@@ -77,25 +135,25 @@ algo:
         reencode_smpl_g1_recon: true
         encoders:
           g1:
-            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_b_mf_nonflat"]
+            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
           teleop:
             inputs:
               [
                 "command_multi_future_lower_body",
                 "vr_3point_local_target",
                 "vr_3point_local_orn_target",
-                "motion_anchor_ori_b",
+                "motion_anchor_ori_heading",
               ]
           smpl:
             inputs:
               [
                 "smpl_joints_multi_future_local_nonflat",
-                "smpl_root_ori_b_multi_future",
+                "smpl_root_ori_heading_multi_future",
                 "joint_pos_multi_future_wrist_for_smpl",
               ]
         decoders:
           g1_kin:
-            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_b_mf_nonflat"]
+            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
 
     critic:
       backbone:

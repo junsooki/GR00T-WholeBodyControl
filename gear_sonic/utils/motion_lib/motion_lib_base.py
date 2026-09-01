@@ -358,8 +358,13 @@ class MotionLibBase:
         self.randomize_wrist_poses = self.m_cfg.get("randomize_wrist_poses", False)
         self.randomize_wrist_prob = self.m_cfg.get("randomize_wrist_prob", 0.3)
         self.randomize_wrist_std = self.m_cfg.get("randomize_wrist_std", 0.1)
-        # MuJoCo DOF indices for wrist joints (L/R roll/pitch/yaw)
-        self.wrist_mujoco_dof_indices = [19, 20, 21, 26, 27, 28]
+        # MuJoCo DOF indices for wrist joints (L/R roll/pitch/yaw). These are
+        # per-robot: G1's 29-DOF order puts them at 19-21/26-28, H2's 31-DOF
+        # order at 21-23/28-30. Using G1's on H2 randomises shoulder_yaw and
+        # elbow instead, so let the config override them.
+        self.wrist_mujoco_dof_indices = (
+            self.m_cfg.get("wrist_mujoco_dof_indices") or [19, 20, 21, 26, 27, 28]
+        )
 
     def load_data(self, motion_file):
         if osp.isfile(motion_file):
