@@ -503,13 +503,23 @@ class PicoSource:
     MAX_TARGET_SPEED = 2.0   # m/s
     MAX_HEAD_SPEED = 4.0     # rad/s
 
-    # Hand targets are clamped to this. Measured, not guessed: with both arms
-    # driven to the clamp in every axis at once, the robot topples at 0.40 m and
-    # above (falling at 3.3-5.8 s) and stays up at 0.35 and below. The legs only
-    # ever track a frozen standing reference, so a large enough arm command moves
-    # the centre of mass further than the balance controller can answer.
-    # test_h2_teleop_scenarios.py reproduces the sweep.
-    def __init__(self, position_gain=1.0, max_offset=0.35, track_head=True):
+    # Hand targets are clamped to this. Two different limits were measured, and
+    # this is the smaller one:
+    #
+    #   stability  driving both arms to the clamp in every axis at once topples
+    #              the robot at 0.40 m and above (falls at 3.3-5.8 s), holds at
+    #              0.35 and below. The legs only track a frozen standing
+    #              reference, so a big enough arm command walks the centre of
+    #              mass past what the balance controller can answer.
+    #   fidelity   steady-state hand tracking error is 2-6 cm out to 0.30 m and
+    #              jumps to 12.5 cm at 0.35 -- past ~0.30 the arm is being asked
+    #              for poses it cannot reach, so the operator moves and the robot
+    #              does not follow.
+    #
+    # Clamping at the fidelity knee rather than the stability edge keeps the
+    # robot responsive and leaves 25% margin before the fall threshold.
+    # test_h2_teleop_scenarios.py reproduces both sweeps.
+    def __init__(self, position_gain=1.0, max_offset=0.30, track_head=True):
         try:
             import xrobotoolkit_sdk as xrt
         except ImportError as exc:

@@ -77,11 +77,12 @@ def dropout(t):
 def extreme_reach(t):
     """Push to PicoSource's clamp in every axis at once, both arms opposed.
 
-    This is the case that set the clamp: a sweep showed the robot topples at
-    0.40 m and above and holds at 0.35, so PicoSource.max_offset is 0.35.
+    A sweep showed the robot topples at 0.40 m and above and holds at 0.35, while
+    tracking error stays at 2-6 cm out to 0.30 and jumps to 12.5 cm at 0.35. The
+    clamp is set at the fidelity knee, 0.30.
     """
     a = min(t / 3.0, 1.0)
-    c = 0.35
+    c = 0.30
     return {"left": [c * a, c * 0.67 * a, c * a],
             "right": [c * a, -c * 0.67 * a, -c * 0.67 * a]}
 
@@ -104,6 +105,13 @@ SCENARIOS = [
 
 
 def run_one(mod, mujoco, ort, model, spec, session, in_name, target_fn, seconds):
+    """Roll out one scenario.
+
+    Returns pelvis heights, when it fell, peak action magnitude, and how closely
+    the hands actually followed the commanded targets. Stability alone is not
+    enough to tune against: a policy that ignores the operator is perfectly
+    stable and useless.
+    """
     data = mujoco.MjData(model)
     reference = mod.TeleopReference(spec, model, mujoco, target_fn=target_fn)
     obs = mod.ObservationBuilder(spec)
@@ -116,6 +124,15 @@ def run_one(mod, mujoco, ort, model, spec, session, in_name, target_fn, seconds)
     obs.reset(data, action)
 
     heights, fell_at, max_action = [], None, 0.0
+    lw = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_wrist_yaw_link")
+    rw = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "right_wrist_yaw_link")
+    pelvis = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+    # Where the wrists rest in the pelvis frame with no command, so commanded
+    # offsets can be compared against achieved ones.
+    rest = {}
+    for key, bid in (("left", lw), ("right", rw)):
+        rest[key] = data.xpos[bid] - data.xpos[pelvis]
+    errors = []
     for step in range(int(seconds / (mod.SIM_DT * mod.DECIMATION))):
         t = step * mod.SIM_DT * mod.DECIMATION
         heading = mod.heading_quat(data.qpos[3:7])
@@ -133,11 +150,19 @@ def run_one(mod, mujoco, ort, model, spec, session, in_name, target_fn, seconds)
             mujoco.mj_step(model, data)
         obs.update(data, action)
         heights.append(data.qpos[2])
+
+        commanded = target_fn(t) or {}
+        for key, bid in (("left", lw), ("right", rw)):
+            want = np.asarray(commanded.get(key, [0.0, 0.0, 0.0]), dtype=float)
+            got = (data.xpos[bid] - data.xpos[pelvis]) - rest[key]
+            errors.append(float(np.linalg.norm(got - want)))
+
         if fell_at is None and data.qpos[2] < 0.4:
             fell_at = t
             break
     h = np.asarray(heights)
-    return h, fell_at, max_action
+    err = np.asarray(errors) if errors else np.zeros(1)
+    return h, fell_at, max_action, err
 
 
 def main(argv=None):
@@ -155,18 +180,29 @@ def main(argv=None):
     session = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
     in_name = session.get_inputs()[0].name
 
-    print(f"{'scenario':<20}{'min h':>8}{'end h':>8}{'|a|max':>9}  outcome")
-    print("-" * 60)
+    print(f"{'scenario':<20}{'min h':>8}{'|a|max':>9}{'err mean':>10}{'err max':>9}  outcome")
+    print("-" * 68)
     failures = 0
+    all_err = []
     for name, fn in SCENARIOS:
-        h, fell, amax = run_one(mod, mujoco, ort, model, spec, session, in_name,
-                                fn, args.seconds)
+        h, fell, amax, err = run_one(mod, mujoco, ort, model, spec, session,
+                                     in_name, fn, args.seconds)
         ok = fell is None
         failures += 0 if ok else 1
         outcome = "ok" if ok else f"FELL at {fell:.1f}s"
-        print(f"{name:<20}{h.min():>8.3f}{h[-1]:>8.3f}{amax:>9.2f}  {outcome}")
-    print("-" * 60)
-    print(f"{len(SCENARIOS) - failures}/{len(SCENARIOS)} scenarios stayed up")
+        if ok:
+            all_err.append(err.mean())
+        print(f"{name:<20}{h.min():>8.3f}{amax:>9.2f}"
+              f"{err.mean() * 100:>9.1f}cm{err.max() * 100:>8.1f}cm  {outcome}")
+    print("-" * 68)
+    print(f"{len(SCENARIOS) - failures}/{len(SCENARIOS)} stayed up", end="")
+    if all_err:
+        print(f"   mean hand tracking error {np.mean(all_err) * 100:.1f} cm")
+    else:
+        print()
+    print("\nerr = distance between the commanded hand target and where the wrist")
+    print("actually ended up, both relative to the pelvis. Lower is better tracking;")
+    print("it is only meaningful on scenarios that stayed up.")
     return 1 if failures else 0
 
 
