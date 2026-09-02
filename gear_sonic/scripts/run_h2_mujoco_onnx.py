@@ -789,6 +789,7 @@ def run(args):
 
     frames = []
     heights, fell_at = [], None
+    viewer_used = bool(args.viewer)
 
     with contextlib.ExitStack() as stack:
         renderer = None
@@ -886,7 +887,19 @@ def run(args):
         fps = round(1.0 / (SIM_DT * DECIMATION * args.render_every))
         imageio.mimsave(args.video, frames, fps=fps)
         print(f"video      {args.video} ({len(frames)} frames @ {fps} fps)")
-    return 0 if fell_at is None else 1
+
+    status = 0 if fell_at is None else 1
+    if viewer_used:
+        # Tearing down the GL context at interpreter exit segfaults after a
+        # passive-viewer session -- on the NVIDIA display and on llvmpipe alike,
+        # so it is the driver-independent teardown path rather than one machine's
+        # GL stack. The run itself has completed and every result is already
+        # printed, so leave without running those destructors: otherwise a
+        # perfectly good run ends in "Segmentation fault (core dumped)".
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(status)
+    return status
 
 
 def main(argv=None):
