@@ -1,0 +1,37 @@
+<mujoco model="h2_31dof scene">
+  <!-- This file has to live next to h2.xml: h2.xml's compiler meshdir is relative
+       to its own directory, and MuJoCo resolves mesh paths against the including
+       file, so a scene in any other directory loads but finds no meshes. -->
+  <include file="h2.xml"/>
+
+  <!-- h2.xml ships without an <option> block. implicitfast is the integrator the
+       H2 policy is trained and replayed with; base_sim overrides the timestep
+       with SIMULATE_DT, this value only matters if the scene is loaded directly. -->
+  <option timestep="0.005" integrator="implicitfast"/>
+
+  <statistic center="0 0 0.5" extent="2.0"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <!-- Site -->
+    <site name="com_marker" pos="0.1 0 0" size="0.05" rgba="1 0 0 1" type="sphere"/>
+  </worldbody>
+
+  <default>
+    <geom friction="1.0"/>
+  </default>
+</mujoco>

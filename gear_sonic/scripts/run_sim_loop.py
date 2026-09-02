@@ -1,7 +1,8 @@
-"""Entry point for running a MuJoCo simulation loop with the G1 robot model.
+"""Entry point for running a MuJoCo simulation loop with a supported robot model.
 
-Parses a YAML-based WBC config via tyro CLI, instantiates the G1 robot model,
-and launches the simulator (optionally with offscreen image publishing).
+Parses a YAML-based WBC config via tyro CLI, instantiates the robot model for
+``--robot`` (g1 by default, h2 also supported), and launches the simulator
+(optionally with offscreen image publishing).
 """
 
 from typing import Dict
@@ -10,9 +11,7 @@ import tyro
 
 from gear_sonic.utils.mujoco_sim.simulator_factory import SimulatorFactory, init_channel
 from gear_sonic.utils.mujoco_sim.configs import SimLoopConfig
-from gear_sonic.data.robot_model.instantiation.g1 import (
-    instantiate_g1_robot_model,
-)
+from gear_sonic.data.robot_model.instantiation import instantiate_robot_model
 from gear_sonic.data.robot_model.robot_model import RobotModel
 
 ArgsConfig = SimLoopConfig
@@ -43,7 +42,7 @@ def main(config: ArgsConfig):
             config.enable_offscreen
         ), "enable_offscreen must be True when enable_image_publish is True"
 
-    robot_model = instantiate_g1_robot_model()
+    robot_model = instantiate_robot_model(config.robot)
 
     sim_wrapper = SimWrapper(
         robot_model=robot_model,

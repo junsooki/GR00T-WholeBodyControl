@@ -33,7 +33,9 @@ class UnitreeSdk2Bridge:
         # It is unsafe and would be unflexible if we use a hand-plugged robot model
 
         robot_type = config["ROBOT_TYPE"]
-        if "g1" in robot_type or "h1-2" in robot_type:
+        # H2 speaks the same hg IDL and topics as G1; only the motor count in the
+        # message differs, and that comes from NUM_MOTORS below.
+        if "g1" in robot_type or "h1-2" in robot_type or "h2" in robot_type:
             from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__IMUState_ as IMUState_default,
                 unitree_hg_msg_dds__LowCmd_,
@@ -53,7 +55,9 @@ class UnitreeSdk2Bridge:
 
             self.low_cmd = unitree_go_msg_dds__LowCmd_()
         else:
-            raise ValueError(f"Invalid robot type '{robot_type}'. Expected 'g1', 'h1', or 'go2'.")
+            raise ValueError(
+                f"Invalid robot type '{robot_type}'. Expected 'g1', 'h2', 'h1', or 'go2'."
+            )
 
         self.num_body_motor = config["NUM_MOTORS"]
         self.num_hand_motor = config.get("NUM_HAND_MOTORS", 0)
@@ -68,7 +72,7 @@ class UnitreeSdk2Bridge:
         self.low_state_puber.Init()
 
         # Only create odo_state for supported robot types
-        if "g1" in robot_type or "h1-2" in robot_type:
+        if "g1" in robot_type or "h1-2" in robot_type or "h2" in robot_type:
             self.odo_state = OdoState_default()
             self.odo_state_puber = ChannelPublisher("rt/odostate", OdoState_)
             self.odo_state_puber.Init()

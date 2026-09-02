@@ -1,4 +1,4 @@
-"""MuJoCo simulation environment and loop for the G1 (and H1) humanoid robots.
+"""MuJoCo simulation environment and loop for the G1, H2 (and H1) humanoid robots.
 
 DefaultEnv owns the MuJoCo model/data, computes PD torques from Unitree SDK
 commands, steps physics, and publishes observations back via the SDK bridge.
@@ -184,7 +184,7 @@ class DefaultEnv:
         # Enable the elastic band
         if self.config["ENABLE_ELASTIC_BAND"] and self.use_floating_root_link:
             self.elastic_band = ElasticBand()
-            if "g1" in self.config["ROBOT_TYPE"]:
+            if "g1" in self.config["ROBOT_TYPE"] or "h2" in self.config["ROBOT_TYPE"]:
                 if self.config["enable_waist"]:
                     self.band_attached_link = self.mj_model.body("pelvis").id
                 else:
@@ -230,7 +230,17 @@ class DefaultEnv:
             if any(
                 [
                     part_name in name
-                    for part_name in ["hip", "knee", "ankle", "waist", "shoulder", "elbow", "wrist"]
+                    # "head" is H2's 2-DOF neck; G1 has a head link but no head joint.
+                    for part_name in [
+                        "hip",
+                        "knee",
+                        "ankle",
+                        "waist",
+                        "head",
+                        "shoulder",
+                        "elbow",
+                        "wrist",
+                    ]
                 ]
             ):
                 self.body_joint_index.append(i)

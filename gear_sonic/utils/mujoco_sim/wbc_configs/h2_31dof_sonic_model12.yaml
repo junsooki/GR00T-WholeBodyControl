@@ -1,0 +1,239 @@
+# H2 counterpart of g1_29dof_sonic_model12.yaml.
+#
+# Only the keys the MuJoCo sim loop and the Unitree SDK bridge read are defined
+# here. The G1 file additionally carries the observation layout, history sizes
+# and mimic-model tables of the *Python* whole body controller; H2 is driven by
+# the C++ deployment, whose policy configuration lives in
+# gear_sonic_deploy/policy/sonic_h2/observation_config.yaml, so duplicating a
+# G1-shaped copy of it here would only be a second source of truth to drift.
+#
+# Every 31-element list below is in h2.xml actuator order, which is also the
+# hardware motor order (see gear_sonic_deploy/.../robot_parameters_h2.hpp).
+# Note ankle ROLL precedes ankle PITCH, the reverse of G1, and indices 15-16 are
+# the head joints G1 does not have.
+
+ROBOT_TYPE: 'h2_31dof'
+ROBOT_SCENE: "gear_sonic/data/assets/robot_description/mjcf/scene_h2_31dof.xml" # Robot scene, for Sim2Sim
+
+DOMAIN_ID: 0 # Domain id
+# Network Interface, "lo" for simulation and the one with "192.168.123.222" for real robot
+INTERFACE: "lo"
+SIMULATOR: "mujoco"
+
+USE_JOYSTICK: 0 # Simulate Unitree WirelessController using a gamepad (0: disable, 1: enable)
+JOYSTICK_TYPE: "xbox" # support "xbox" and "switch" gamepad layout
+JOYSTICK_DEVICE: 0 # Joystick number
+
+FREE_BASE: False
+
+PRINT_SCENE_INFORMATION: True # Print link, joint and sensors information of robot
+ENABLE_ELASTIC_BAND: True # Virtual spring band, used for holding the robot up
+
+SIMULATE_DT: 0.005  # Need to be larger than the runtime of viewer.sync()
+VIEWER_DT: 0.02  # Viewer update time
+REWARD_DT: 0.02
+USE_SENSOR: False
+
+UNITREE_LEGGED_CONST:
+  HIGHLEVEL: 0xEE
+  LOWLEVEL: 0xFF
+  TRIGERLEVEL: 0xF0
+  PosStopF: 2146000000.0
+  VelStopF: 16000.0
+  MODE_MACHINE: 5
+  MODE_PR:  0
+
+# H2 exposes one motor per joint in hardware order, so both maps are the identity.
+MOTOR2JOINT: [0, 1, 2, 3, 4, 5,
+              6, 7, 8, 9, 10, 11,
+              12, 13, 14,
+              15, 16,
+              17, 18, 19, 20, 21, 22, 23,
+              24, 25, 26, 27, 28, 29, 30]
+
+JOINT2MOTOR: [0, 1, 2, 3, 4, 5,
+              6, 7, 8, 9, 10, 11,
+              12, 13, 14,
+              15, 16,
+              17, 18, 19, 20, 21, 22, 23,
+              24, 25, 26, 27, 28, 29, 30]
+
+# Gains are H2_CFG's stiffness/damping (gear_sonic/envs/manager_env/robots/h2.py),
+# which is what the deployment sends in the low command -- not G1's hand-tuned
+# hardware gains, which belong to a different tuning regime entirely.
+JOINT_KP: [
+    99.0984, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+    99.0984, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+    40.1792, 28.5012, 28.5012,
+    28.5012, 28.5012,
+    14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783,
+    14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783
+]
+
+JOINT_KD: [
+    6.3088, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+    6.3088, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+    2.5579, 1.8144, 1.8144,
+    1.8144, 1.8144,
+    0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681,
+    0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681
+]
+
+MOTOR_KP: [
+    99.0984, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+    99.0984, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+    40.1792, 28.5012, 28.5012,
+    28.5012, 28.5012,
+    14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783,
+    14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783
+]
+
+MOTOR_KD: [
+    6.3088, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+    6.3088, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+    2.5579, 1.8144, 1.8144,
+    1.8144, 1.8144,
+    0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681,
+    0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681
+]
+
+WeakMotorJointIndex:
+  left_hip_pitch_joint: 0
+  left_hip_roll_joint: 1
+  left_hip_yaw_joint: 2
+  left_knee_joint: 3
+  left_ankle_roll_joint: 4
+  left_ankle_pitch_joint: 5
+  right_hip_pitch_joint: 6
+  right_hip_roll_joint: 7
+  right_hip_yaw_joint: 8
+  right_knee_joint: 9
+  right_ankle_roll_joint: 10
+  right_ankle_pitch_joint: 11
+  waist_yaw_joint: 12
+  waist_roll_joint: 13
+  waist_pitch_joint: 14
+  head_pitch_joint: 15
+  head_yaw_joint: 16
+  left_shoulder_pitch_joint: 17
+  left_shoulder_roll_joint: 18
+  left_shoulder_yaw_joint: 19
+  left_elbow_joint: 20
+  left_wrist_roll_joint: 21
+  left_wrist_pitch_joint: 22
+  left_wrist_yaw_joint: 23
+  right_shoulder_pitch_joint: 24
+  right_shoulder_roll_joint: 25
+  right_shoulder_yaw_joint: 26
+  right_elbow_joint: 27
+  right_wrist_roll_joint: 28
+  right_wrist_pitch_joint: 29
+  right_wrist_yaw_joint: 30
+
+NUM_MOTORS: 31
+NUM_JOINTS: 31
+# H2's hands are passive rubber shells: the palm joints in h2.urdf are fixed.
+NUM_HAND_MOTORS: 0
+NUM_HAND_JOINTS: 0
+NUM_UPPER_BODY_JOINTS: 19  # 3 waist + 2 head + 14 arm
+
+# From H2_CFG.init_state.joint_pos.
+DEFAULT_DOF_ANGLES: [
+    -0.312,  # left_hip_pitch_joint
+    0.0,     # left_hip_roll_joint
+    0.0,     # left_hip_yaw_joint
+    0.669,   # left_knee_joint
+    0.0,     # left_ankle_roll_joint
+    -0.363,  # left_ankle_pitch_joint
+    -0.312,  # right_hip_pitch_joint
+    0.0,     # right_hip_roll_joint
+    0.0,     # right_hip_yaw_joint
+    0.669,   # right_knee_joint
+    0.0,     # right_ankle_roll_joint
+    -0.363,  # right_ankle_pitch_joint
+    0.0,     # waist_yaw_joint
+    0.0,     # waist_roll_joint
+    0.0,     # waist_pitch_joint
+    0.0,     # head_pitch_joint
+    0.0,     # head_yaw_joint
+    0.2,     # left_shoulder_pitch_joint
+    0.2,     # left_shoulder_roll_joint
+    0.0,     # left_shoulder_yaw_joint
+    0.6,     # left_elbow_joint
+    0.0,     # left_wrist_roll_joint
+    0.0,     # left_wrist_pitch_joint
+    0.0,     # left_wrist_yaw_joint
+    0.2,     # right_shoulder_pitch_joint
+    -0.2,    # right_shoulder_roll_joint
+    0.0,     # right_shoulder_yaw_joint
+    0.6,     # right_elbow_joint
+    0.0,     # right_wrist_roll_joint
+    0.0,     # right_wrist_pitch_joint
+    0.0      # right_wrist_yaw_joint
+]
+
+DEFAULT_MOTOR_ANGLES: [
+    -0.312,  # left_hip_pitch_joint
+    0.0,     # left_hip_roll_joint
+    0.0,     # left_hip_yaw_joint
+    0.669,   # left_knee_joint
+    0.0,     # left_ankle_roll_joint
+    -0.363,  # left_ankle_pitch_joint
+    -0.312,  # right_hip_pitch_joint
+    0.0,     # right_hip_roll_joint
+    0.0,     # right_hip_yaw_joint
+    0.669,   # right_knee_joint
+    0.0,     # right_ankle_roll_joint
+    -0.363,  # right_ankle_pitch_joint
+    0.0,     # waist_yaw_joint
+    0.0,     # waist_roll_joint
+    0.0,     # waist_pitch_joint
+    0.0,     # head_pitch_joint
+    0.0,     # head_yaw_joint
+    0.2,     # left_shoulder_pitch_joint
+    0.2,     # left_shoulder_roll_joint
+    0.0,     # left_shoulder_yaw_joint
+    0.6,     # left_elbow_joint
+    0.0,     # left_wrist_roll_joint
+    0.0,     # left_wrist_pitch_joint
+    0.0,     # left_wrist_yaw_joint
+    0.2,     # right_shoulder_pitch_joint
+    -0.2,    # right_shoulder_roll_joint
+    0.0,     # right_shoulder_yaw_joint
+    0.6,     # right_elbow_joint
+    0.0,     # right_wrist_roll_joint
+    0.0,     # right_wrist_pitch_joint
+    0.0      # right_wrist_yaw_joint
+]
+
+# Position, velocity and effort limits are h2.urdf's own (h2.xml agrees).
+motor_pos_lower_limit_list: [-2.4526, -0.467441, -2.827, -0.08725, -0.349066, -1.13446,
+                             -2.4526, -2.16886, -2.827, -0.08725, -0.296706, -1.13446,
+                             -1.7453, -0.5236, -0.43633,
+                             -0.5236, -1.7453,
+                             -2.61799, -0.516617, -2.61799, -0.986111,
+                             -2.61799, -0.436332, -1.22173,
+                             -2.61799, -2.63545, -2.61799, -0.986111,
+                             -2.61799, -0.436332, -1.22173]
+motor_pos_upper_limit_list: [2.77542, 2.16886, 2.827, 2.53025, 0.296706, 0.610865,
+                             2.77542, 0.467441, 2.827, 2.53025, 0.349066, 0.610865,
+                             1.7453, 0.5236, 0.5236,
+                             0.83775, 1.7453,
+                             1.8326, 2.63545, 2.61799, 3.07178,
+                             2.61799, 0.436332, 1.22173,
+                             1.8326, 0.516617, 2.61799, 3.07178,
+                             2.61799, 0.436332, 1.22173]
+motor_vel_limit_list: [20.0, 20.0, 20.0, 20.0, 100.70, 28.61,
+                       20.0, 20.0, 20.0, 20.0, 100.70, 28.61,
+                       28.375, 28.375, 28.375,
+                       10.0, 10.0,
+                       28.375, 34.30, 34.30, 34.30, 34.30, 50.125, 50.125,
+                       28.375, 34.30, 34.30, 34.30, 34.30, 50.125, 50.125]
+# ankle_roll is a far smaller actuator than ankle_pitch (19 vs 66.88 Nm), so
+# unlike G1 the two cannot share a value.
+motor_effort_limit_list: [360.0, 360.0, 360.0, 360.0, 19.0, 66.88,
+                          360.0, 360.0, 360.0, 360.0, 19.0, 66.88,
+                          120.0, 180.0, 180.0,
+                          50.0, 50.0,
+                          120.0, 54.0, 54.0, 54.0, 54.0, 25.0, 25.0,
+                          120.0, 54.0, 54.0, 54.0, 54.0, 25.0, 25.0]

@@ -17,6 +17,14 @@ from gear_sonic.utils.network.network_utils import resolve_interface
 
 WBC_VERSIONS = ["sonic_model12"]
 
+# WBC YAML per robot type. Each file carries its own joint count, gains and
+# scene, so switching robots is a change of file rather than of key.
+WBC_CONFIG_FILES = {
+    "g1": "g1_29dof_sonic_model12.yaml",
+    "h2": "h2_31dof_sonic_model12.yaml",
+}
+ROBOT_TYPES = list(WBC_CONFIG_FILES)
+
 @dataclass
 class ArgsConfigTemplate:
     """Args Config for running the data collection loop."""
@@ -100,8 +108,11 @@ def override_wbc_config(
             wbc_config[key] = key_to_value[key]
 
     # Sim-to-real KD gap: waist pitch (index 14) is over-damped in sim;
-    # reduce KD by 10 on the real robot to avoid sluggish response
-    if config.env_type == "real":
+    # reduce KD by 10 on the real robot to avoid sluggish response.
+    # G1 only: H2's KD values are an order of magnitude smaller (its gains come
+    # from the training config, not from hand tuning), so a flat -10 would flip
+    # the sign of the gain rather than soften it.
+    if config.env_type == "real" and config.robot == "g1":
         wbc_config["MOTOR_KD"][14] = wbc_config["MOTOR_KD"][14] - 10
 
     return wbc_config
@@ -112,6 +123,10 @@ class BaseConfig(ArgsConfigTemplate):
     """Base config inherited by all G1 control loops"""
 
     dataset_version: str = "sonic_model12"
+
+    # Robot Type
+    robot: Literal[tuple(ROBOT_TYPES)] = "g1"
+    """Robot embodiment to run. Selects the WBC config, scene and robot model."""
 
     # WBC Configuration
     wbc_version: Literal[tuple(WBC_VERSIONS)] = "sonic_model12"
@@ -313,13 +328,16 @@ class BaseConfig(ArgsConfigTemplate):
         gear_sonic_path = Path(os.path.dirname(gear_sonic.__file__))
         configs_dir = gear_sonic_path / "utils" / "mujoco_sim" / "wbc_configs"
 
-        if self.wbc_version == "sonic_model12":
-            config_path = str(configs_dir / "g1_29dof_sonic_model12.yaml")
-        else:
+        if self.wbc_version != "sonic_model12":
             raise ValueError(
                 f"Invalid wbc_version: {self.wbc_version}, please use one of: "
                 f"sonic_model12"
             )
+        if self.robot not in WBC_CONFIG_FILES:
+            raise ValueError(
+                f"Invalid robot: {self.robot}, please use one of: {sorted(WBC_CONFIG_FILES)}"
+            )
+        config_path = str(configs_dir / WBC_CONFIG_FILES[self.robot])
 
         with open(config_path) as file:
             wbc_config = yaml.load(file, Loader=yaml.FullLoader)
