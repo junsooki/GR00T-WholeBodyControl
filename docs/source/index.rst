@@ -84,6 +84,7 @@ Documentation
    getting_started/installation_deploy
    getting_started/download_models
    getting_started/quickstart
+   getting_started/h2_setup
    getting_started/vr_teleop_setup
 
 .. toctree::

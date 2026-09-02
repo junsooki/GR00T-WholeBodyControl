@@ -225,3 +225,6 @@ sonic_release/
 external_dependencies/IsaacLab/
 .venv_train/
 *.log
+
+# Locally downloaded H2 policy export (ONNX, ~255 MB)
+h2_policy/
