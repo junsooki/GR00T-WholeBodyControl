@@ -50,16 +50,34 @@ struct H2MotorCommand {
 };
 
 /**
- * @brief Symbolic names for H2 hardware joint indices (0-30).
+ * @brief H2 hardware (DDS motor) joint indices, 0-30.
  *
- * Note LeftAnkleRoll = 4 and LeftAnklePitch = 5 -- the reverse of G1.
+ * Taken from the Unitree SDK's own corrected H2JointIndex
+ * (unitree_sdk2_python example/h2/low_level/h2_ankle_swing_example.py, fixed in
+ * commit 65691c8 "Correct the order and spelling errors in the H2 joint index").
+ *
+ * IMPORTANT: unlike G1, H2's hardware order is NOT its MJCF actuator order.
+ * G1's two orders coincide, which makes it easy to assume the same holds here.
+ * It does not -- 17 of 31 joints sit at a different index:
+ *
+ *   waist    hardware roll, pitch, yaw   vs   MJCF yaw, roll, pitch
+ *   wrists   hardware yaw, pitch, roll   vs   MJCF roll, pitch, yaw
+ *   head     hardware 29-30 (last)       vs   MJCF 15-16 (after the waist)
+ *
+ * Only the twelve leg joints agree. Anything indexed by a DDS motor index must
+ * use this enum; anything indexed by MJCF/policy order must not. Convert with
+ * H2_HARDWARE_TO_MUJOCO / H2_MUJOCO_TO_HARDWARE below.
+ *
+ * The SDK also exposes WaistA/WaistB and AnkleA/AnkleB aliases, so H2 does have
+ * coupled mechanisms addressable in parallel mode; this port only ever drives
+ * them in series, which is why no A/B aliases are defined here.
  */
 enum H2JointIndex {
   H2_LeftHipPitch = 0,
   H2_LeftHipRoll = 1,
   H2_LeftHipYaw = 2,
   H2_LeftKnee = 3,
-  H2_LeftAnkleRoll = 4,   // roll before pitch on H2
+  H2_LeftAnkleRoll = 4,
   H2_LeftAnklePitch = 5,
   H2_RightHipPitch = 6,
   H2_RightHipRoll = 7,
@@ -67,50 +85,62 @@ enum H2JointIndex {
   H2_RightKnee = 9,
   H2_RightAnkleRoll = 10,
   H2_RightAnklePitch = 11,
-  H2_WaistYaw = 12,
-  H2_WaistRoll = 13,
-  H2_WaistPitch = 14,
-  H2_HeadPitch = 15,      // no G1 equivalent
-  H2_HeadYaw = 16,        // no G1 equivalent
-  H2_LeftShoulderPitch = 17,
-  H2_LeftShoulderRoll = 18,
-  H2_LeftShoulderYaw = 19,
-  H2_LeftElbow = 20,
+  H2_WaistRoll = 12,
+  H2_WaistPitch = 13,
+  H2_WaistYaw = 14,
+  H2_LeftShoulderPitch = 15,
+  H2_LeftShoulderRoll = 16,
+  H2_LeftShoulderYaw = 17,
+  H2_LeftElbow = 18,
+  H2_LeftWristYaw = 19,
+  H2_LeftWristPitch = 20,
   H2_LeftWristRoll = 21,
-  H2_LeftWristPitch = 22,
-  H2_LeftWristYaw = 23,
-  H2_RightShoulderPitch = 24,
-  H2_RightShoulderRoll = 25,
-  H2_RightShoulderYaw = 26,
-  H2_RightElbow = 27,
+  H2_RightShoulderPitch = 22,
+  H2_RightShoulderRoll = 23,
+  H2_RightShoulderYaw = 24,
+  H2_RightElbow = 25,
+  H2_RightWristYaw = 26,
+  H2_RightWristPitch = 27,
   H2_RightWristRoll = 28,
-  H2_RightWristPitch = 29,
-  H2_RightWristYaw = 30
+  H2_HeadPitch = 29,
+  H2_HeadYaw = 30,
 };
 
-/// Joint names in hardware order, for logging and for asserting against the MJCF.
+/// hardware index -> MJCF actuator index.
+static const std::array<int, H2_NUM_MOTOR> H2_HARDWARE_TO_MUJOCO = {
+    0, 1, 2, 3, 4, 5, 6, 7,
+    8, 9, 10, 11, 13, 14, 12, 17,
+    18, 19, 20, 23, 22, 21, 24, 25,
+    26, 27, 30, 29, 28, 15, 16};
+
+/// MJCF actuator index -> hardware index.
+static const std::array<int, H2_NUM_MOTOR> H2_MUJOCO_TO_HARDWARE = {
+    0, 1, 2, 3, 4, 5, 6, 7,
+    8, 9, 10, 11, 14, 12, 13, 29,
+    30, 15, 16, 17, 18, 21, 20, 19,
+    22, 23, 24, 25, 28, 27, 26};
+
+/// Joint identifiers in HARDWARE order (see the enum note above).
 static const std::array<std::string, H2_NUM_MOTOR> H2_JOINT_NAMES = {
     "left_hip_pitch", "left_hip_roll", "left_hip_yaw", "left_knee",
-    "left_ankle_roll", "left_ankle_pitch",
-    "right_hip_pitch", "right_hip_roll", "right_hip_yaw", "right_knee",
-    "right_ankle_roll", "right_ankle_pitch",
-    "waist_yaw", "waist_roll", "waist_pitch",
-    "head_pitch", "head_yaw",
-    "left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow",
-    "left_wrist_roll", "left_wrist_pitch", "left_wrist_yaw",
-    "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow",
-    "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw"};
+    "left_ankle_roll", "left_ankle_pitch", "right_hip_pitch", "right_hip_roll",
+    "right_hip_yaw", "right_knee", "right_ankle_roll", "right_ankle_pitch",
+    "waist_roll", "waist_pitch", "waist_yaw", "left_shoulder_pitch",
+    "left_shoulder_roll", "left_shoulder_yaw", "left_elbow", "left_wrist_yaw",
+    "left_wrist_pitch", "left_wrist_roll", "right_shoulder_pitch", "right_shoulder_roll",
+    "right_shoulder_yaw", "right_elbow", "right_wrist_yaw", "right_wrist_pitch",
+    "right_wrist_roll", "head_pitch", "head_yaw"};
 
-/// Human-readable names, spoken by the TTS high-temperature warning. See the
-/// note on G1_JOINT_DISPLAY_NAMES.
+/// Human-readable names in HARDWARE order, spoken by the TTS high-temperature
+/// warning. See the note on G1_JOINT_DISPLAY_NAMES.
 static const std::array<std::string, H2_NUM_MOTOR> H2_JOINT_DISPLAY_NAMES = {
     "Left Hip Pitch", "Left Hip Roll", "Left Hip Yaw", "Left Knee",
     "Left Ankle Roll", "Left Ankle Pitch", "Right Hip Pitch", "Right Hip Roll",
     "Right Hip Yaw", "Right Knee", "Right Ankle Roll", "Right Ankle Pitch",
-    "Waist Yaw", "Waist Roll", "Waist Pitch", "Head Pitch",
-    "Head Yaw", "Left Shoulder Pitch", "Left Shoulder Roll", "Left Shoulder Yaw",
-    "Left Elbow", "Left Wrist Roll", "Left Wrist Pitch", "Left Wrist Yaw",
-    "Right Shoulder Pitch", "Right Shoulder Roll", "Right Shoulder Yaw", "Right Elbow",
-    "Right Wrist Roll", "Right Wrist Pitch", "Right Wrist Yaw"};
+    "Waist Roll", "Waist Pitch", "Waist Yaw", "Left Shoulder Pitch",
+    "Left Shoulder Roll", "Left Shoulder Yaw", "Left Elbow", "Left Wrist Yaw",
+    "Left Wrist Pitch", "Left Wrist Roll", "Right Shoulder Pitch", "Right Shoulder Roll",
+    "Right Shoulder Yaw", "Right Elbow", "Right Wrist Yaw", "Right Wrist Pitch",
+    "Right Wrist Roll", "Head Pitch", "Head Yaw"};
 
 #endif // ROBOT_PARAMETERS_H2_HPP
