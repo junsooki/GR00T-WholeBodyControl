@@ -17,7 +17,7 @@
  */
 
 #include "state_logger.hpp"
-#include "policy_parameters.hpp"
+#include "robot_config.hpp"  // For NUM_MOTOR, isaaclab_to_mujoco, default_angles
 
 #include <iostream>
 #include <algorithm>
@@ -292,7 +292,7 @@ void StateLogger::appendCsvLinesSplit_(const Entry& e) {
   // - body_dq: convert from IsaacLab order to robot hardware order
   std::vector<double> body_q_measured(e.body_q.size());
   std::vector<double> body_dq_measured(e.body_dq.size());
-  for (size_t i = 0; i < e.body_q.size() && i < 29; i++) {
+  for (size_t i = 0; i < e.body_q.size() && i < NUM_MOTOR; i++) {
     body_q_measured[i] = e.body_q[isaaclab_to_mujoco[i]] + default_angles[i];
     body_dq_measured[i] = e.body_dq[isaaclab_to_mujoco[i]];
   }

@@ -14,6 +14,7 @@
 #ifndef UTILS_HPP
 #define UTILS_HPP
 
+#include <mutex>
 #include <memory>
 #include <chrono>
 #include <shared_mutex>

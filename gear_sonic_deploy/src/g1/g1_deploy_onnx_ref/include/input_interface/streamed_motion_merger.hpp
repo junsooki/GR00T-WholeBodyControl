@@ -51,8 +51,10 @@
 #include <iomanip>
 #include <cstring>
 
-// Forward declaration – MotionSequence is defined in motion_data_reader.hpp.
-struct MotionSequence;
+#include "../robot_config.hpp"        // For NUM_MOTOR
+// MotionSequence is defined here; the merger calls its members inline, so a
+// forward declaration is not enough.
+#include "../motion_data_reader.hpp"
 
 /**
  * @class StreamedMotionMerger
@@ -113,7 +115,7 @@ public:
     void Reset() {
         streamed_motion_ = std::make_shared<MotionSequence>();
         streamed_motion_->name = "streamed";
-        streamed_motion_->ReserveCapacity(15000, 29, 1, 1, 0, 0);
+        streamed_motion_->ReserveCapacity(15000, NUM_MOTOR, 1, 1, 0, 0);
         stream_window_start_ = 0;
     }
     

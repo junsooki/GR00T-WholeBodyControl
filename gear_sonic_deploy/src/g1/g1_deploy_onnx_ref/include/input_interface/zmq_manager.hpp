@@ -11,6 +11,9 @@
  *              | Wire format: `{ start: bool, stop: bool, planner: bool, delta_heading?: f32 }`
  *   planner    | Per-frame locomotion commands (mode, movement, facing, speed, height,
  *              | optional upper-body / hand / VR data).  Active in PLANNER mode.
+ *              | The upper_body_position / upper_body_velocity fields are
+ *              | NUM_UPPER_BODY_JOINTS wide: 17 on G1, 19 on H2 (H2 adds two
+ *              | head joints).  A field of any other length is rejected.
  *   pose       | Streamed motion frames (joint_pos, joint_vel, body_quat, …).
  *              | Active in STREAMED_MOTION mode, handled by an internal ZMQEndpointInterface.
  *
@@ -56,6 +59,7 @@
 #include "input_command.hpp"
 #include "zmq_endpoint_interface.hpp"
 #include "zmq_packed_message_subscriber.hpp"
+#include "../robot_config.hpp"  // For NUM_UPPER_BODY_JOINTS
 #include "../localmotion_kplanner.hpp"  // For LocomotionMode enum
 #include "../math_utils.hpp"  // For normalize_vector
 
@@ -766,6 +770,55 @@ class ZMQManager : public InputInterface {
       }
     }
     
+    /// Decode one upper-body field (position or velocity) from a planner message.
+    ///
+    /// The upper-body width is robot-dependent — 17 on G1, 19 on H2 (which adds
+    /// two head joints) — so a sender built for the other robot delivers a field
+    /// of the wrong length.  BufferView::size is the field's declared extent, so
+    /// comparing it against the expected byte count catches that before the
+    /// decode loop reads past the end of the payload.
+    ///
+    /// @return true when @p out was filled; false when the field was rejected.
+    static bool DecodeUpperBodyField(
+        const char* field_name,
+        const ZMQPackedMessageSubscriber::FieldInfo& field,
+        const ZMQPackedMessageSubscriber::BufferView& buf,
+        bool needs_swap,
+        std::array<double, NUM_UPPER_BODY_JOINTS>& out) {
+
+      const bool is_f32 = (field.dtype == "f32");
+      const size_t elem_size = is_f32 ? sizeof(float) : sizeof(double);  // f64 or default
+      const size_t expected_bytes = static_cast<size_t>(NUM_UPPER_BODY_JOINTS) * elem_size;
+
+      if (buf.size != expected_bytes) {
+        std::cerr << "[ZMQManager] Planner '" << field_name << "' carries "
+                  << (buf.size / elem_size) << " " << field.dtype << " values, but this "
+                  << ROBOT_NAME << " build expects " << NUM_UPPER_BODY_JOINTS
+                  << " - ignoring the field (sender and robot disagree on upper-body width)"
+                  << std::endl;
+        return false;
+      }
+
+      for (int i = 0; i < NUM_UPPER_BODY_JOINTS; ++i) {
+        if (is_f32) {
+          float val;
+          std::memcpy(&val,
+                      static_cast<const uint8_t*>(buf.data) + i * sizeof(float),
+                      sizeof(float));
+          if (needs_swap) val = byte_swap(val);
+          out[i] = static_cast<double>(val);
+        } else { // f64 or default
+          double val;
+          std::memcpy(&val,
+                      static_cast<const uint8_t*>(buf.data) + i * sizeof(double),
+                      sizeof(double));
+          if (needs_swap) val = byte_swap(val);
+          out[i] = val;
+        }
+      }
+      return true;
+    }
+
     void OnPlannerReceived(
         const std::string& topic,
         const ZMQPackedMessageSubscriber::DecodedHeader& hdr,
@@ -882,66 +935,34 @@ class ZMQManager : public InputInterface {
         }
       }
 
-      // Optional: upper_body_position (17 DOF, decode based on dtype)
+      // Optional: upper_body_position (NUM_UPPER_BODY_JOINTS DOF, decode based on dtype)
       if (upper_body_position_idx >= 0) {
-        const auto& ub_pos_buf = bufs[upper_body_position_idx];
-        const auto& ub_pos_field = hdr.fields[upper_body_position_idx];
+        std::array<double, NUM_UPPER_BODY_JOINTS> upper_body_position_data{};
+        if (DecodeUpperBodyField("upper_body_position",
+                                 hdr.fields[upper_body_position_idx],
+                                 bufs[upper_body_position_idx],
+                                 needs_swap,
+                                 upper_body_position_data)) {
+          msg.upper_body_position = upper_body_position_data;
 
-        std::array<double, 17> upper_body_position_data{};
-        if (ub_pos_field.dtype == "f32") {
-          for (int i = 0; i < 17; ++i) {
-            float val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(ub_pos_buf.data) + i * sizeof(float),
-                        sizeof(float));
-            if (needs_swap) val = byte_swap(val);
-            upper_body_position_data[i] = static_cast<double>(val);
-          }
-        } else { // f64 or default
-          for (int i = 0; i < 17; ++i) {
-            double val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(ub_pos_buf.data) + i * sizeof(double),
-                        sizeof(double));
-            if (needs_swap) val = byte_swap(val);
-            upper_body_position_data[i] = val;
-          }
+          // Push into upper-body position buffer
+          upper_body_joint_positions_.SetData(upper_body_position_data);
         }
-        msg.upper_body_position = upper_body_position_data;
-
-        // Push into upper-body position buffer
-        upper_body_joint_positions_.SetData(upper_body_position_data);
       }
 
-      // Optional: upper_body_velocity (17 DOF, decode based on dtype)
+      // Optional: upper_body_velocity (NUM_UPPER_BODY_JOINTS DOF, decode based on dtype)
       if (upper_body_velocity_idx >= 0) {
-        const auto& ub_vel_buf = bufs[upper_body_velocity_idx];
-        const auto& ub_vel_field = hdr.fields[upper_body_velocity_idx];
+        std::array<double, NUM_UPPER_BODY_JOINTS> upper_body_velocity_data{};
+        if (DecodeUpperBodyField("upper_body_velocity",
+                                 hdr.fields[upper_body_velocity_idx],
+                                 bufs[upper_body_velocity_idx],
+                                 needs_swap,
+                                 upper_body_velocity_data)) {
+          msg.upper_body_velocity = upper_body_velocity_data;
 
-        std::array<double, 17> upper_body_velocity_data{};
-        if (ub_vel_field.dtype == "f32") {
-          for (int i = 0; i < 17; ++i) {
-            float val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(ub_vel_buf.data) + i * sizeof(float),
-                        sizeof(float));
-            if (needs_swap) val = byte_swap(val);
-            upper_body_velocity_data[i] = static_cast<double>(val);
-          }
-        } else { // f64 or default
-          for (int i = 0; i < 17; ++i) {
-            double val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(ub_vel_buf.data) + i * sizeof(double),
-                        sizeof(double));
-            if (needs_swap) val = byte_swap(val);
-            upper_body_velocity_data[i] = val;
-          }
+          // Push into upper-body velocity buffer
+          upper_body_joint_velocities_.SetData(upper_body_velocity_data);
         }
-        msg.upper_body_velocity = upper_body_velocity_data;
-
-        // Push into upper-body velocity buffer
-        upper_body_joint_velocities_.SetData(upper_body_velocity_data);
       }
       
       // Optional: left_hand_joints (7 DOF, decode based on dtype)

@@ -23,7 +23,8 @@
  *
  * A single msgpack map with up to 30 keys (28 always-present + 2 conditional).
  * All joints are in **MuJoCo order** (remapped from IsaacLab via
- * `isaaclab_to_mujoco`).
+ * `isaaclab_to_mujoco`).  Joint-vector widths below are written as NUM_MOTOR:
+ * 29 on G1, 31 on H2, following the robot this binary was built for.
  *
  *   #  | Key                    | Type         | Description
  *   ---|------------------------|--------------|---------------------------------------------
@@ -39,8 +40,8 @@
  *   7  | body_torso_ang_vel     | double[3]    | Torso angular velocity.
  *      |                        |              |
  *      | **Body joints**        |              |
- *   8  | body_q                 | double[29]   | Joint positions (+ default offsets).
- *   9  | body_dq                | double[29]   | Joint velocities.
+ *   8  | body_q                 | double[NUM_MOTOR] | Joint positions (+ default offsets).
+ *   9  | body_dq                | double[NUM_MOTOR] | Joint velocities.
  *      |                        |              |
  *      | **Hand joints**        |              |
  *  10  | left_hand_q            | double[7]    | Left-hand joint positions (from state logger).
@@ -49,7 +50,7 @@
  *  13  | right_hand_dq          | double[7]    | Right-hand joint velocities.
  *      |                        |              |
  *      | **Policy actions**     |              |
- *  14  | last_action            | double[29]   | Last body action (scaled + default offsets).
+ *  14  | last_action            | double[NUM_MOTOR] | Last body action (scaled + default offsets).
  *  15  | last_left_hand_action  | double[7]    | Last left-hand action.
  *  16  | last_right_hand_action | double[7]    | Last right-hand action.
  *      |                        |              |
@@ -63,12 +64,12 @@
  *      | **Viz: targets** *(from current motion frame + heading correction)* |
  *  20  | base_trans_target      | double[3]    | Target base translation.
  *  21  | base_quat_target       | double[4]    | Target base quaternion.
- *  22  | body_q_target          | double[29]   | Target joint positions.
+ *  22  | body_q_target          | double[NUM_MOTOR] | Target joint positions.
  *      |                        |              |
  *      | **Viz: measured**      |              |
  *  23  | base_trans_measured    | double[3]    | Measured base translation (fixed default).
  *  24  | base_quat_measured     | double[4]    | Measured base quaternion (= base_quat).
- *  25  | body_q_measured        | double[29]   | Measured joint positions (= body_q).
+ *  25  | body_q_measured        | double[NUM_MOTOR] | Measured joint positions (= body_q).
  *  26  | left_hand_q_measured   | double[7]    | Measured left-hand Dex3 positions.
  *  27  | right_hand_q_measured  | double[7]    | Measured right-hand Dex3 positions.
  *      |                        |              |
@@ -111,8 +112,8 @@
 #include <msgpack.hpp>
 
 #include "output_interface.hpp"
-#include "../policy_parameters.hpp"  // For isaaclab_to_mujoco, default_angles, g1_action_scale
-#include "../robot_parameters.hpp"   // For HeadingState
+#include "../robot_config.hpp"       // For NUM_MOTOR, isaaclab_to_mujoco, default_angles,
+                                     // action_scale and HeadingState
 #include "../utils.hpp"              // For DataBuffer
 
 /**
@@ -315,9 +316,9 @@ private:
         // body_q: IsaacLab -> MuJoCo order, add default-angle offset
         pk.pack("body_q");
         pk.pack_array(state.body_q.size());
-        if (state.body_q.size() == 29) {
-            std::array<double, 29> body_q_mujoco;
-            for (size_t i = 0; i < 29; ++i)
+        if (state.body_q.size() == NUM_MOTOR) {
+            std::array<double, NUM_MOTOR> body_q_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i)
                 body_q_mujoco[i] = state.body_q[isaaclab_to_mujoco[i]] + default_angles[i];
             for (const auto& val : body_q_mujoco) pk.pack(val);
         } else {
@@ -327,9 +328,9 @@ private:
         // body_dq: IsaacLab -> MuJoCo order (no offset for velocities)
         pk.pack("body_dq");
         pk.pack_array(state.body_dq.size());
-        if (state.body_dq.size() == 29) {
-            std::array<double, 29> body_dq_mujoco;
-            for (size_t i = 0; i < 29; ++i)
+        if (state.body_dq.size() == NUM_MOTOR) {
+            std::array<double, NUM_MOTOR> body_dq_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i)
                 body_dq_mujoco[i] = state.body_dq[isaaclab_to_mujoco[i]];
             for (const auto& val : body_dq_mujoco) pk.pack(val);
         } else {
@@ -339,10 +340,10 @@ private:
         // last_action: IsaacLab -> MuJoCo order, scale + default-angle offset
         pk.pack("last_action");
         pk.pack_array(state.last_action.size());
-        if (state.last_action.size() == 29) {
-            std::array<double, 29> last_action_mujoco;
-            for (size_t i = 0; i < 29; ++i)
-                last_action_mujoco[i] = state.last_action[isaaclab_to_mujoco[i]] * g1_action_scale[i] + default_angles[i];
+        if (state.last_action.size() == NUM_MOTOR) {
+            std::array<double, NUM_MOTOR> last_action_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i)
+                last_action_mujoco[i] = state.last_action[isaaclab_to_mujoco[i]] * action_scale[i] + default_angles[i];
             for (const auto& val : last_action_mujoco) pk.pack(val);
         } else {
             for (const auto& val : state.last_action) pk.pack(val);

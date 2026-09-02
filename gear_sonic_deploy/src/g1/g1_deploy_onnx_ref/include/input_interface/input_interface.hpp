@@ -35,7 +35,7 @@
 #include <memory>
 #include <optional>
 #include "../utils.hpp"              // For DataBuffer  
-#include "../robot_parameters.hpp"   // For HeadingState, OperatorState
+#include "../robot_config.hpp"   // For HeadingState, OperatorState, NUM_UPPER_BODY_JOINTS
 #include "../motion_data_reader.hpp" // For MotionDataReader, MotionSequence
 #include "../math_utils.hpp"         // For float_to_double
 #include "../localmotion_kplanner.hpp" // For PlannerState, MovementState
@@ -366,7 +366,7 @@ public:
 
     /// @brief Get upper-body joint target positions (17 DOF, radians).
     /// @return {true, positions} if upper-body data is available; {false, zeros} otherwise.
-    virtual std::pair<bool, std::array<double, 17>> GetUpperBodyJointPositions() const {
+    virtual std::pair<bool, std::array<double, NUM_UPPER_BODY_JOINTS>> GetUpperBodyJointPositions() const {
         if(!has_upper_body_control_) {
             return {false, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
         }
@@ -379,7 +379,7 @@ public:
 
     /// @brief Get upper-body joint target velocities (17 DOF, rad/s).
     /// @return {true, velocities} if upper-body data is available; {false, zeros} otherwise.
-    virtual std::pair<bool, std::array<double, 17>> GetUpperBodyJointVelocities() const {
+    virtual std::pair<bool, std::array<double, NUM_UPPER_BODY_JOINTS>> GetUpperBodyJointVelocities() const {
         if(!has_upper_body_control_) {
             return {false, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
         }
@@ -480,9 +480,9 @@ protected:
     DataBuffer<std::array<double, 20>> vr_5point_orientation_;
 
     /// Upper-body target joint positions (17 DOF, radians).
-    DataBuffer<std::array<double, 17>> upper_body_joint_positions_;
+    DataBuffer<std::array<double, NUM_UPPER_BODY_JOINTS>> upper_body_joint_positions_;
     /// Upper-body target joint velocities (17 DOF, rad/s).
-    DataBuffer<std::array<double, 17>> upper_body_joint_velocities_;
+    DataBuffer<std::array<double, NUM_UPPER_BODY_JOINTS>> upper_body_joint_velocities_;
     
     /// Left-hand Dex3 joint positions (7 DOF).
     DataBuffer<std::array<double, 7>> left_hand_joint_;

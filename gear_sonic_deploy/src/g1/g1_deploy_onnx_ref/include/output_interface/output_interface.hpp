@@ -42,8 +42,10 @@
 #include <vector>
 #include <msgpack.hpp>
 
+#include "../robot_config.hpp"       // For NUM_MOTOR, isaaclab_to_mujoco, default_angles
 #include "../state_logger.hpp"
 #include "../motion_data_reader.hpp"
+#include "../utils.hpp"              // For DataBuffer
 
 /**
  * @class OutputInterface
@@ -115,22 +117,25 @@ protected:
      * Populates `output_data_map_` with the following keys and serialises the
      * result into `output_data_sbuf_` via msgpack:
      *
-     *   Key                    | Size | Description
-     *   -----------------------|------|------------
-     *   base_trans_target      |  3   | Target base translation (heading-corrected).
-     *   base_quat_target       |  4   | Target base quaternion (heading-corrected).
-     *   body_q_target          | 29   | Target joint positions (MuJoCo order).
-     *   base_trans_measured    |  3   | Measured base translation (fixed default).
-     *   base_quat_measured     |  4   | Measured base quaternion from IMU.
-     *   body_q_measured        | 29   | Measured joint positions (MuJoCo order + default offsets).
-     *   left_hand_q_measured   |  7   | Left-hand Dex3 joint positions.
-     *   right_hand_q_measured  |  7   | Right-hand Dex3 joint positions.
-     *   vr_3point_position     |  9   | VR positions rotated into target body frame.
-     *   vr_3point_orientation  | 12   | VR orientations (passed through).
-     *   vr_3point_compliance   |  3   | VR compliance values (passed through).
+     *   Key                    | Size       | Description
+     *   -----------------------|------------|------------
+     *   base_trans_target      |  3         | Target base translation (heading-corrected).
+     *   base_quat_target       |  4         | Target base quaternion (heading-corrected).
+     *   body_q_target          | NUM_MOTOR  | Target joint positions (MuJoCo order).
+     *   base_trans_measured    |  3         | Measured base translation (fixed default).
+     *   base_quat_measured     |  4         | Measured base quaternion from IMU.
+     *   body_q_measured        | NUM_MOTOR  | Measured joint positions (MuJoCo order + default offsets).
+     *   left_hand_q_measured   |  7         | Left-hand Dex3 joint positions.
+     *   right_hand_q_measured  |  7         | Right-hand Dex3 joint positions.
+     *   vr_3point_position     |  9         | VR positions rotated into target body frame.
+     *   vr_3point_orientation  | 12         | VR orientations (passed through).
+     *   vr_3point_compliance   |  3         | VR compliance values (passed through).
+     *
+     * NUM_MOTOR is 29 on G1 and 31 on H2, so the joint-vector width on the wire
+     * follows the robot this binary was built for.
      *
      * Joint ordering uses `isaaclab_to_mujoco` remapping and `default_angles`
-     * offsets from policy_parameters.hpp.
+     * offsets from robot_config.hpp.
      */
     void create_output_data_map(
         const std::array<double, 9>& vr_3point_position,
@@ -167,20 +172,20 @@ protected:
                                   current_frame < static_cast<int>(current_motion->timesteps);
 
         // Independent capability checks for the current motion
-        bool has_joint_data = motion_frame_valid && current_motion->GetNumJoints() >= 29;
+        bool has_joint_data = motion_frame_valid && current_motion->GetNumJoints() >= NUM_MOTOR;
         bool has_body_positions = motion_frame_valid && current_motion->GetNumBodies() >= 1;
         bool has_body_quaternions = motion_frame_valid && current_motion->GetNumBodyQuaternions() >= 1;
 
         // ---- Initialise target arrays with safe defaults ----
-        std::array<double, 29> body_q_target;
+        std::array<double, NUM_MOTOR> body_q_target;
         body_q_target.fill(0.0);
         std::array<double, 3> base_trans_target = {0.0, 0.0, 0.0};
         std::array<double, 4> base_quat_target = {1.0, 0.0, 0.0, 0.0};  // Identity quaternion
         
         // ---- Populate measured values from robot state (always available) ----
         // Remap from IsaacLab joint ordering to MuJoCo ordering and add default offsets.
-        std::array<double, 29> body_q_measured;
-        for (int i = 0; i < 29; i++) {
+        std::array<double, NUM_MOTOR> body_q_measured;
+        for (int i = 0; i < NUM_MOTOR; i++) {
           body_q_measured[i] = state.body_q[isaaclab_to_mujoco[i]] + default_angles[i];
         }
         std::array<double, 3> base_trans_measured = {0.0, -1.0, 0.793};  // Fixed default position
@@ -188,7 +193,7 @@ protected:
 
         // Populate joint targets if available
         if (has_joint_data) {
-          for (int i = 0; i < 29; i++) {
+          for (int i = 0; i < NUM_MOTOR; i++) {
             body_q_target[i] = current_motion->JointPositions(current_frame)[isaaclab_to_mujoco[i]];
           }
         }

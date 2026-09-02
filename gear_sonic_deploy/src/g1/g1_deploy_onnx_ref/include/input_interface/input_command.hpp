@@ -20,6 +20,7 @@
 #include <chrono>
 #include <optional>
 
+#include "../robot_config.hpp"          // For NUM_UPPER_BODY_JOINTS
 #include "../localmotion_kplanner.hpp"  // For LocomotionMode enum
 
 // ---------------------------------------------------------------------------
@@ -60,10 +61,15 @@ struct CommandMessage {
  * Optional fields (may or may not be present):
  *   - speed              : float – desired locomotion speed (-1.0 = use default)
  *   - height             : float – desired body height      (-1.0 = use default)
- *   - upper_body_position: float[17] – target upper-body joint positions  (radians)
- *   - upper_body_velocity: float[17] – target upper-body joint velocities (rad/s)
+ *   - upper_body_position: float[NUM_UPPER_BODY_JOINTS] – target upper-body joint positions  (radians)
+ *   - upper_body_velocity: float[NUM_UPPER_BODY_JOINTS] – target upper-body joint velocities (rad/s)
  *   - left_hand_joints   : float[7]  – Dex3 left-hand joint positions
  *   - right_hand_joints  : float[7]  – Dex3 right-hand joint positions
+ *
+ * @warning The upper-body width is robot-dependent: 17 on G1 (waist 3 + arms 14)
+ *          and 19 on H2 (waist 3 + head 2 + arms 14).  Senders must match the
+ *          robot this binary was built for; ZMQManager rejects a mismatched
+ *          field length rather than reading past the end of the payload.
  *
  * The `timestamp` field is set locally on receipt and used for timeout
  * detection (planner messages older than ~1 s are considered stale).
@@ -82,12 +88,12 @@ struct PlannerMessage {
   /// Defaults to facing forward along the +X axis.
   std::array<double, 3> facing = {1.0, 0.0, 0.0};
 
-  /// Optional upper-body joint target positions (17 DOF, radians).
+  /// Optional upper-body joint target positions (NUM_UPPER_BODY_JOINTS DOF, radians).
   /// Present when the remote controller provides whole-body commands.
-  std::optional<std::array<double, 17>> upper_body_position;
+  std::optional<std::array<double, NUM_UPPER_BODY_JOINTS>> upper_body_position;
 
-  /// Optional upper-body joint target velocities (17 DOF, rad/s).
-  std::optional<std::array<double, 17>> upper_body_velocity;
+  /// Optional upper-body joint target velocities (NUM_UPPER_BODY_JOINTS DOF, rad/s).
+  std::optional<std::array<double, NUM_UPPER_BODY_JOINTS>> upper_body_velocity;
 
   /// Optional left-hand Dex3 joint positions (7 DOF).
   std::optional<std::array<double, 7>> left_hand_joints;

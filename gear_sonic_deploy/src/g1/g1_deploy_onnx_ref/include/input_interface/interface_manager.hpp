@@ -32,6 +32,7 @@
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
 
 #include "input_interface.hpp"
 #include "keyboard_handler.hpp"

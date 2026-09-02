@@ -11,7 +11,9 @@
  *
  * ## State Topic (`G1Env/env_state_act`)
  *
- * Published every control-loop tick.  The msgpack map contains:
+ * Published every control-loop tick.  NUM_MOTOR is 29 on G1 and 31 on H2, so
+ * the joint-vector widths below follow the robot this binary was built for.
+ * The msgpack map contains:
  *
  *   Key                  | Type         | Description
  *   ---------------------|--------------|------------
@@ -22,9 +24,9 @@
  *   base_ang_vel         | double[3]    | Base angular velocity.
  *   body_torso_quat      | double[4]    | Torso IMU quaternion.
  *   body_torso_ang_vel   | double[3]    | Torso angular velocity.
- *   body_q               | double[29]   | Joint positions (MuJoCo order + default offsets).
- *   body_dq              | double[29]   | Joint velocities (MuJoCo order).
- *   last_action          | double[29]   | Last policy action (MuJoCo order, scaled + offset).
+ *   body_q               | double[NUM_MOTOR] | Joint positions (MuJoCo order + default offsets).
+ *   body_dq              | double[NUM_MOTOR] | Joint velocities (MuJoCo order).
+ *   last_action          | double[NUM_MOTOR] | Last policy action (MuJoCo order, scaled + offset).
  *   left_hand_q          | double[7]    | Left-hand joint positions.
  *   left_hand_dq         | double[7]    | Left-hand joint velocities.
  *   right_hand_q         | double[7]    | Right-hand joint positions.
@@ -66,8 +68,8 @@
 #include <msgpack.hpp>
 
 #include "output_interface.hpp"
-#include "../policy_parameters.hpp"  // For isaaclab_to_mujoco, default_angles, g1_action_scale
-#include "../robot_parameters.hpp"  // For HeadingState
+#include "../robot_config.hpp"  // For NUM_MOTOR, isaaclab_to_mujoco, default_angles,
+                                // action_scale and HeadingState
 #include "../utils.hpp"  // For DataBuffer
 
 /**
@@ -421,10 +423,10 @@ private:
         // Pack body_q (dynamic size) - recover original values (add offset, convert to MuJoCo order)
         pk.pack("body_q");
         pk.pack_array(state.body_q.size());
-        if (state.body_q.size() == 29) {
+        if (state.body_q.size() == NUM_MOTOR) {
             // Create temporary array for MuJoCo-ordered values
-            std::array<double, 29> body_q_mujoco;
-            for (size_t i = 0; i < 29; ++i) {
+            std::array<double, NUM_MOTOR> body_q_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i) {
                 // Add back the offset (body_q is in IsaacLab order, default_angles is in MuJoCo order)
                 body_q_mujoco[i] = state.body_q[isaaclab_to_mujoco[i]] + default_angles[i];
             }
@@ -442,10 +444,10 @@ private:
         // Pack body_dq (dynamic size) - convert to MuJoCo order (no offset for velocities)
         pk.pack("body_dq");
         pk.pack_array(state.body_dq.size());
-        if (state.body_dq.size() == 29) {
+        if (state.body_dq.size() == NUM_MOTOR) {
             // Create temporary array for MuJoCo-ordered values
-            std::array<double, 29> body_dq_mujoco;
-            for (size_t i = 0; i < 29; ++i) {
+            std::array<double, NUM_MOTOR> body_dq_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i) {
                 // Convert to MuJoCo order (velocities don't have offset)
                 body_dq_mujoco[i] = state.body_dq[isaaclab_to_mujoco[i]];
             }
@@ -463,12 +465,12 @@ private:
         // Pack last_action (dynamic size) - convert to MuJoCo order
         pk.pack("last_action");
         pk.pack_array(state.last_action.size());
-        if (state.last_action.size() == 29) {
+        if (state.last_action.size() == NUM_MOTOR) {
             // Create temporary array for MuJoCo-ordered values
-            std::array<double, 29> last_action_mujoco;
-            for (size_t i = 0; i < 29; ++i) {
+            std::array<double, NUM_MOTOR> last_action_mujoco;
+            for (size_t i = 0; i < NUM_MOTOR; ++i) {
                 // Convert to MuJoCo order (actions are in IsaacLab order in logger)
-                last_action_mujoco[i] = state.last_action[isaaclab_to_mujoco[i]] * g1_action_scale[i] + default_angles[i];
+                last_action_mujoco[i] = state.last_action[isaaclab_to_mujoco[i]] * action_scale[i] + default_angles[i];
             }
             // Pack in MuJoCo order
             for (const auto& val : last_action_mujoco) {
