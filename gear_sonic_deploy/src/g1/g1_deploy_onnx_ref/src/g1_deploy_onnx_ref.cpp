@@ -98,9 +98,8 @@
 // Utility classes
 #include "../include/utils.hpp"
 
-// Robot parameters
-#include "../include/robot_parameters.hpp"
-#include "../include/policy_parameters.hpp"
+// Robot parameters -- selects G1 or H2 at compile time (-DROBOT_H2=1)
+#include "../include/robot_config.hpp"
 
 // Input interface and input handlers
 #include "../include/input_interface/keyboard_handler.hpp"
@@ -199,8 +198,8 @@ class G1Deploy {
     std::array<double, 7> left_hand_joint_buffer_;
     std::array<double, 7> right_hand_joint_buffer_;
     bool has_upper_body_data_ = false;
-    std::array<double, 17> upper_body_joint_positions_buffer_;
-    std::array<double, 17> upper_body_joint_velocities_buffer_;
+    std::array<double, NUM_UPPER_BODY_JOINTS> upper_body_joint_positions_buffer_;
+    std::array<double, NUM_UPPER_BODY_JOINTS> upper_body_joint_velocities_buffer_;
     std::vector<double> token_state_data_;  // Token buffer (size from config)
     
     // =========================================================================
@@ -235,7 +234,7 @@ class G1Deploy {
     // States: IDLE (do nothing), ADAPTING (toward robot state), RECOVERING (toward planner target).
     // Each state has a trigger threshold (enter) and stop threshold (exit).
     enum class IdleReadaptState { IDLE, ADAPTING, RECOVERING };
-    std::array<double, 29> idle_readapt_original_targets_{};
+    std::array<double, NUM_MOTOR> idle_readapt_original_targets_{};
     bool idle_readapt_stored_ = false;
     IdleReadaptState idle_readapt_state_ = IdleReadaptState::IDLE;
     static constexpr double kAdaptTrigger  = 0.10;   // rad: start adapting
@@ -254,7 +253,7 @@ class G1Deploy {
     std::string pending_tts_;  // One-shot TTS message, consumed by GatherInputInterfaceData()
 
     // Per-motor high temperature hysteresis (enter at >= 90, exit at < 85)
-    std::array<bool, G1_NUM_MOTOR> motor_high_temp_ = {};
+    std::array<bool, NUM_MOTOR> motor_high_temp_ = {};
     static constexpr int16_t HIGH_TEMP_ENTER = 90;
     static constexpr int16_t HIGH_TEMP_EXIT = 85;
     bool high_temp_warning_ = false;
@@ -278,7 +277,8 @@ class G1Deploy {
     // =========================================================================
     std::unique_ptr<unitree::robot::b2::MotionSwitcherClient> msc_;
     
-    // Dex3 hands manager
+    // Dex3 hands manager. A G1 accessory on its own DDS topics: on H2 the object
+    // exists but is never initialized, so no hand channel is ever opened.
     Dex3Hands dex3_hands_;
 
     // Motor error monitor (tracks fault state transitions)
@@ -295,7 +295,7 @@ class G1Deploy {
     static constexpr std::chrono::milliseconds LOW_STATE_LATE_THRESHOLD{50};
     static constexpr std::chrono::milliseconds LOW_STATE_ABSENT_THRESHOLD{500};
     ProgramState program_state_;
-    std::array<double, G1_NUM_MOTOR> last_action;
+    std::array<double, NUM_MOTOR> last_action;
     std::array<double, 7> last_left_hand_action;
     std::array<double, 7> last_right_hand_action;
     
@@ -730,7 +730,7 @@ class G1Deploy {
       return true;
     }
 
-    /// Gather joint positions from N future frames.  If joint_indexes is empty, gathers all 29.
+    /// Gather joint positions from N future frames.  If joint_indexes is empty, gathers all NUM_MOTOR.
     /// When upper-body control is active (has_upper_body_data_), replaces upper-body joints with
     /// the externally-provided targets.
     bool GatherMotionJointPositionsMultiFrame(std::vector<double>& target_buffer, size_t offset, int num_frames = 5, int step_size = 5, std::vector<int> joint_indexes = {}) {
@@ -769,20 +769,20 @@ class G1Deploy {
 
         // If body part indexes are empty, gather all joints
         if (joint_indexes.empty()) {
-          size_t frame_offset = offset + frame_idx * 29;  // 29 joints per frame
+          size_t frame_offset = offset + frame_idx * NUM_MOTOR;
           std::copy(
             motion_joint_pos,
             motion_joint_pos + num_joints,
             target_buffer.begin() + frame_offset
           );
-          
+
           // If upper body control is enabled, use upper body joint positions in buffer to replace the motion_joint_pos
           if (has_upper_body_data_) {
-            std::array<double, 29> current_motion_joint_pos;
-            for (size_t i = 0; i < 29; i++) {
+            std::array<double, NUM_MOTOR> current_motion_joint_pos;
+            for (size_t i = 0; i < NUM_MOTOR; i++) {
               current_motion_joint_pos[i] = motion_joint_pos[i];
             }
-            for (size_t i = 0; i < 17; i++) {
+            for (size_t i = 0; i < upper_body_joint_isaaclab_order_in_isaaclab_index.size(); i++) {
               current_motion_joint_pos[upper_body_joint_isaaclab_order_in_isaaclab_index[i]] = upper_body_joint_positions_buffer_[i];
             }
             std::copy(
@@ -846,7 +846,7 @@ class G1Deploy {
 
         // If body part indexes are empty, gather all joints
         if (joint_indexes.empty()) {
-          size_t frame_offset = offset + frame_idx * 29;  // 29 joints per frame
+          size_t frame_offset = offset + frame_idx * NUM_MOTOR;
           if (operator_state.play) {
             std::copy(
               motion_joint_vel,
@@ -855,11 +855,11 @@ class G1Deploy {
             );
             // If upper body control is enabled, use upper body joint velocities in buffer to replace the motion_joint_vel
             if (has_upper_body_data_) {
-              std::array<double, 29> current_motion_joint_vel;
-              for (size_t i = 0; i < 29; i++) {
+              std::array<double, NUM_MOTOR> current_motion_joint_vel;
+              for (size_t i = 0; i < NUM_MOTOR; i++) {
                 current_motion_joint_vel[i] = motion_joint_vel[i];
               }
-              for (size_t i = 0; i < 17; i++) {
+              for (size_t i = 0; i < upper_body_joint_isaaclab_order_in_isaaclab_index.size(); i++) {
                 current_motion_joint_vel[upper_body_joint_isaaclab_order_in_isaaclab_index[i]] = upper_body_joint_velocities_buffer_[i];
               }
               std::copy(
@@ -1707,8 +1707,8 @@ class G1Deploy {
       return {{"token_state", token_dim, [this](std::vector<double>& buf, size_t offset) { return GatherTokenState(buf, offset); }},
               {"encoder_mode", 3, [this](std::vector<double>& buf, size_t offset) { return GatherEncoderMode(buf, offset, 2); }},
               {"encoder_mode_4", 4, [this](std::vector<double>& buf, size_t offset) { return GatherEncoderMode(buf, offset, 3); }},
-              {"motion_joint_positions", 29, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 1, 1); }},
-              {"motion_joint_velocities", 29, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 1, 1); }},
+              {"motion_joint_positions", NUM_MOTOR, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 1, 1); }},
+              {"motion_joint_velocities", NUM_MOTOR, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 1, 1); }},
               {"motion_anchor_orientation", 6, [this](std::vector<double>& buf, size_t offset) { return GatherMotionAnchorOrientationMutiFrame(buf, offset, 1, 1); }},
               {"motion_root_z_position", 1, [this](std::vector<double>& buf, size_t offset) { return GatherMotionRootZPositionMultiFrame(buf, offset, 1, 1); }},
               {"motion_root_z_position_10frame_step5", 10, [this](std::vector<double>& buf, size_t offset) { return GatherMotionRootZPositionMultiFrame(buf, offset, 10, 5); }},
@@ -1726,12 +1726,12 @@ class G1Deploy {
               {"motion_anchor_orientation_refheading", 6, [this](std::vector<double>& buf, size_t offset) { return GatherMotionAnchorOrientationMutiFrame(buf, offset, 1, 1, 2); }},
               {"motion_anchor_orientation_refheading_10frame_step5", 60, [this](std::vector<double>& buf, size_t offset) { return GatherMotionAnchorOrientationMutiFrame(buf, offset, 10, 5, 2); }},
               {"motion_anchor_orientation_refheading_10frame_step1", 60, [this](std::vector<double>& buf, size_t offset) { return GatherMotionAnchorOrientationMutiFrame(buf, offset, 10, 1, 2); }},
-              {"motion_joint_positions_10frame_step5", 290, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 5); }},
-              {"motion_joint_velocities_10frame_step5", 290, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 5); }},
-              {"motion_joint_positions_10frame_step1", 290, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 1); }},
-              {"motion_joint_velocities_10frame_step1", 290, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 1); }},
-              {"motion_joint_positions_3frame_step1", 87, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 3, 1); }},
-              {"motion_joint_velocities_3frame_step1", 87, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 3, 1); }},
+              {"motion_joint_positions_10frame_step5", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 5); }},
+              {"motion_joint_velocities_10frame_step5", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 5); }},
+              {"motion_joint_positions_10frame_step1", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 1); }},
+              {"motion_joint_velocities_10frame_step1", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 1); }},
+              {"motion_joint_positions_3frame_step1", NUM_MOTOR * 3, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 3, 1); }},
+              {"motion_joint_velocities_3frame_step1", NUM_MOTOR * 3, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 3, 1); }},
               {"motion_joint_positions_lowerbody_10frame_step5", 120, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 5, lower_body_joint_mujoco_order_in_isaaclab_index); }},
               {"motion_joint_velocities_lowerbody_10frame_step5", 120, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 5, lower_body_joint_mujoco_order_in_isaaclab_index); }},
               {"motion_joint_positions_lowerbody_10frame_step1", 120, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 10, 1, lower_body_joint_mujoco_order_in_isaaclab_index); }},
@@ -1740,8 +1740,8 @@ class G1Deploy {
               {"motion_joint_positions_wrists_2frame_step1", 12, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 2, 1, wrist_joint_isaaclab_order_in_isaaclab_index); }},
               {"motion_joint_positions_wrists_4frame_step1", 24, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 4, 1, wrist_joint_isaaclab_order_in_isaaclab_index); }},  // low-latency SONIC (smpl 4-frame)
               {"motion_joint_velocities_wrists_10frame_step1", 60, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 10, 1, wrist_joint_isaaclab_order_in_isaaclab_index); }},
-              {"motion_joint_positions_5frame_step5", 145, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 5, 5); }},
-              {"motion_joint_velocities_5frame_step5", 145, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 5, 5); }},
+              {"motion_joint_positions_5frame_step5", NUM_MOTOR * 5, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointPositionsMultiFrame(buf, offset, 5, 5); }},
+              {"motion_joint_velocities_5frame_step5", NUM_MOTOR * 5, [this](std::vector<double>& buf, size_t offset) { return GatherMotionJointVelocitiesMultiFrame(buf, offset, 5, 5); }},
               // SMPL data gathering (dimensions assume 24 joints, 21 poses - adjust based on actual data)
               {"smpl_joints", 72, [this](std::vector<double>& buf, size_t offset) { return GatherMotionSmplJointsMultiFrame(buf, offset, 1, 1); }},  // 24*3
               {"smpl_joints_5frame_step5", 360, [this](std::vector<double>& buf, size_t offset) { return GatherMotionSmplJointsMultiFrame(buf, offset, 5, 5); }},  // 24*3*5
@@ -1778,18 +1778,18 @@ class G1Deploy {
               {"vr_5point_local_orn_target", 20, [this](std::vector<double>& buf, size_t offset) { return GatherVR5PointOrientation(buf, offset); }},
               // History robot state gathering
               {"base_angular_velocity", 3, [this](std::vector<double>& buf, size_t offset) { return GatherHisBaseAngularVelocity(buf, offset, 1, 1); }},
-              {"body_joint_positions", 29, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 1, 1); }},
-              {"body_joint_velocities", 29, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 1, 1); }},
-              {"last_actions", 29, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 1, 1); }},
+              {"body_joint_positions", NUM_MOTOR, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 1, 1); }},
+              {"body_joint_velocities", NUM_MOTOR, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 1, 1); }},
+              {"last_actions", NUM_MOTOR, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 1, 1); }},
               {"gravity_dir", 3, [this](std::vector<double>& buf, size_t offset) { return GatherHisGravityDir(buf, offset, 1, 1); }},
-              {"his_body_joint_positions_4frame_step1", 116, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 4, 1); }},
-              {"his_body_joint_velocities_4frame_step1", 116, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 4, 1); }},
-              {"his_last_actions_4frame_step1", 116, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 4, 1); }},
+              {"his_body_joint_positions_4frame_step1", NUM_MOTOR * 4, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 4, 1); }},
+              {"his_body_joint_velocities_4frame_step1", NUM_MOTOR * 4, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 4, 1); }},
+              {"his_last_actions_4frame_step1", NUM_MOTOR * 4, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 4, 1); }},
               {"his_base_angular_velocity_4frame_step1", 12, [this](std::vector<double>& buf, size_t offset) { return GatherHisBaseAngularVelocity(buf, offset, 4, 1); }},
               {"his_gravity_dir_4frame_step1", 12, [this](std::vector<double>& buf, size_t offset) { return GatherHisGravityDir(buf, offset, 4, 1); }},
-              {"his_body_joint_positions_10frame_step1", 290, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 10, 1); }},
-              {"his_body_joint_velocities_10frame_step1", 290, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 10, 1); }},
-              {"his_last_actions_10frame_step1", 290, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 10, 1); }},
+              {"his_body_joint_positions_10frame_step1", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointPositions(buf, offset, 10, 1); }},
+              {"his_body_joint_velocities_10frame_step1", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherHisBodyJointVelocities(buf, offset, 10, 1); }},
+              {"his_last_actions_10frame_step1", NUM_MOTOR * 10, [this](std::vector<double>& buf, size_t offset) { return GatherHisLastActions(buf, offset, 10, 1); }},
               {"his_base_angular_velocity_10frame_step1", 30, [this](std::vector<double>& buf, size_t offset) { return GatherHisBaseAngularVelocity(buf, offset, 10, 1); }},
               {"his_gravity_dir_10frame_step1", 30, [this](std::vector<double>& buf, size_t offset) { return GatherHisGravityDir(buf, offset, 10, 1); }}};
     }
@@ -2185,7 +2185,9 @@ class G1Deploy {
       ChannelFactory::Instance()->Init(0, networkInterface);
 
       // Initialize Dex3 hands (ChannelFactory already initialized above)
-      dex3_hands_.initialize("");
+      if constexpr (ROBOT_HAS_DEX3_HANDS) {
+        dex3_hands_.initialize("");
+      }
 
       audio_thread_ = std::make_unique<AudioThread>();
 
@@ -2241,7 +2243,7 @@ class G1Deploy {
 
       // Initialize planner motion state as shared_ptr
       planner_motion_ = std::make_shared<MotionSequence>();
-      planner_motion_->ReserveCapacity(1500, 29, 1, 1, 0, 0);
+      planner_motion_->ReserveCapacity(1500, NUM_MOTOR, 1, 1, 0, 0);
       planner_motion_->timesteps = 0;
       planner_motion_->name = "planner_motion";
       // try to shutdown motion control-related service
@@ -2439,7 +2441,7 @@ class G1Deploy {
       try {
         std::string resolved_logs_dir = logs_dir;
         // dt is control_dt_; pass complete robot_config to constructor
-        state_logger_ = std::make_unique<StateLogger>(resolved_logs_dir, 10000, G1_NUM_MOTOR, G1_NUM_MOTOR, 
+        state_logger_ = std::make_unique<StateLogger>(resolved_logs_dir, 10000, NUM_MOTOR, NUM_MOTOR, 
                                                        control_dt_, enable_csv_logs, robot_config);
       } catch (const std::exception& e) {
         std::cerr << "[ERROR] Failed to initialize state logger: " << e.what() << std::endl;
@@ -2518,7 +2520,9 @@ class G1Deploy {
         input_interface_->SetVR3PointCompliance(initial_vr_3point_compliance_);
         // Set initial max close ratio for hands (keyboard-controlled: X/C keys)
         input_interface_->SetMaxCloseRatio(initial_max_close_ratio_);
-        dex3_hands_.SetMaxCloseRatio(initial_max_close_ratio_);
+        if constexpr (ROBOT_HAS_DEX3_HANDS) {
+          dex3_hands_.SetMaxCloseRatio(initial_max_close_ratio_);
+        }
         std::cout << "[INFO] Initial VR 3-point compliance: ["
                   << initial_vr_3point_compliance_[0] << ", "
                   << initial_vr_3point_compliance_[1] << ", "
@@ -2629,8 +2633,8 @@ class G1Deploy {
 
       // Check motor error states (prints only on transitions)
       {
-        std::array<uint32_t, G1_NUM_MOTOR> motorstates;
-        for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+        std::array<uint32_t, NUM_MOTOR> motorstates;
+        for (int i = 0; i < NUM_MOTOR; ++i) {
           motorstates[i] = low_state.motor_state()[i].motorstate();
         }
         error_monitor_.update(motorstates);
@@ -2640,7 +2644,7 @@ class G1Deploy {
 
       // update mode machine
       if (mode_machine_ != low_state.mode_machine()) {
-        if (mode_machine_ == 0) std::cout << "G1 type: " << unsigned(low_state.mode_machine()) << std::endl;
+        if (mode_machine_ == 0) std::cout << ROBOT_NAME << " type: " << unsigned(low_state.mode_machine()) << std::endl;
         mode_machine_ = low_state.mode_machine();
       }
     }
@@ -2660,12 +2664,14 @@ class G1Deploy {
      */
     void LowCommandWriter() {
       LowCmd_ dds_low_command;
-      dds_low_command.mode_pr() = static_cast<uint8_t>(mode_pr_);
+      // H2 has no coupled ankle, so it has no PR/AB mode; the field is still part
+      // of the shared hg IDL and must be written.
+      dds_low_command.mode_pr() = ROBOT_HAS_COUPLED_ANKLE ? static_cast<uint8_t>(mode_pr_) : 0;
       dds_low_command.mode_machine() = mode_machine_;
 
       const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetDataWithTime().data;
       if (mc) {
-        for (size_t i = 0; i < G1_NUM_MOTOR; i++) {
+        for (size_t i = 0; i < NUM_MOTOR; i++) {
           dds_low_command.motor_cmd().at(i).mode() = 1; // 1:Enable, 0:Disable
           dds_low_command.motor_cmd().at(i).tau() = mc->tau_ff.at(i);
           dds_low_command.motor_cmd().at(i).q() = mc->q_target.at(i);
@@ -2679,7 +2685,9 @@ class G1Deploy {
       }
 
       // Publish Dex3 hand commands at the same publish cadence
-      dex3_hands_.writeOnce();
+      if constexpr (ROBOT_HAS_DEX3_HANDS) {
+        dex3_hands_.writeOnce();
+      }
     }
 
     /// Gracefully stop all threads and send a damping-only command.
@@ -2708,7 +2716,7 @@ class G1Deploy {
       MotorCommand motor_command_tmp;
       const std::shared_ptr<const LowState_> ls = low_state_buffer_.GetDataWithTime().data;
 
-      for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+      for (int i = 0; i < NUM_MOTOR; ++i) {
         motor_command_tmp.tau_ff.at(i) = 0.0;
         motor_command_tmp.q_target.at(i) = 0.0;
         motor_command_tmp.dq_target.at(i) = 0.0;
@@ -2733,7 +2741,7 @@ class G1Deploy {
         return false;
       }
       MotorCommand motor_command_tmp;
-      for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+      for (int i = 0; i < NUM_MOTOR; ++i) {
         motor_command_tmp.tau_ff.at(i) = 0.0;
         motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i]);
         motor_command_tmp.dq_target.at(i) = 0.0;
@@ -2742,18 +2750,22 @@ class G1Deploy {
       }
       time_ += control_dt_;
       if (time_ < duration_) {
-        for (int i = 0; i < G1_NUM_MOTOR; i++) {
+        for (int i = 0; i < NUM_MOTOR; i++) {
           double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
           double current_pos = ls->motor_state()[i].q();
           motor_command_tmp.q_target.at(i) =
               static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
         }
-        dex3_hands_.close(true);
-        dex3_hands_.close(false);
+        if constexpr (ROBOT_HAS_DEX3_HANDS) {
+          dex3_hands_.close(true);
+          dex3_hands_.close(false);
+        }
       } else {
         program_state_ = ProgramState::WAIT_FOR_CONTROL;
-        dex3_hands_.open(true);
-        dex3_hands_.open(false);
+        if constexpr (ROBOT_HAS_DEX3_HANDS) {
+          dex3_hands_.open(true);
+          dex3_hands_.open(false);
+        }
         std::cout << "Init Done" << std::endl;
       }
       motor_command_buffer_.SetData(motor_command_tmp);
@@ -2818,14 +2830,14 @@ class G1Deploy {
       used_low_state_data_ = (low_state_data);
       used_imu_torso_data_ = (imu_data);
       // robot state data
-      std::array<double, G1_NUM_MOTOR> body_q = {0.0};
-      std::array<double, G1_NUM_MOTOR> body_dq = {0.0};
+      std::array<double, NUM_MOTOR> body_q = {0.0};
+      std::array<double, NUM_MOTOR> body_dq = {0.0};
 
       auto unitree_joint_state = ls->motor_state();
-      std::array<double, G1_NUM_MOTOR * 2> motor_temperature = {0.0};
-      std::array<double, G1_NUM_MOTOR> motor_error = {0.0};
-      std::array<double, G1_NUM_MOTOR> motor_torque = {0.0};
-      for (int i = 0; i < G1_NUM_MOTOR; i++) {
+      std::array<double, NUM_MOTOR * 2> motor_temperature = {0.0};
+      std::array<double, NUM_MOTOR> motor_error = {0.0};
+      std::array<double, NUM_MOTOR> motor_torque = {0.0};
+      for (int i = 0; i < NUM_MOTOR; i++) {
         body_q[i] =
             unitree_joint_state[mujoco_to_isaaclab[i]].q() - default_angles[mujoco_to_isaaclab[i]]; // URDF order
         body_dq[i] = unitree_joint_state[mujoco_to_isaaclab[i]].dq(); // URDF order
@@ -2854,28 +2866,18 @@ class G1Deploy {
 
       // Build high temperature warning message for audio
       {
-        static const char* joint_names_hw[] = {
-          "Left Hip Pitch", "Left Hip Roll", "Left Hip Yaw", "Left Knee",
-          "Left Ankle Pitch", "Left Ankle Roll", "Right Hip Pitch", "Right Hip Roll",
-          "Right Hip Yaw", "Right Knee", "Right Ankle Pitch", "Right Ankle Roll",
-          "Waist Yaw", "Waist Roll", "Waist Pitch",
-          "Left Shoulder Pitch", "Left Shoulder Roll", "Left Shoulder Yaw", "Left Elbow",
-          "Left Wrist Roll", "Left Wrist Pitch", "Left Wrist Yaw",
-          "Right Shoulder Pitch", "Right Shoulder Roll", "Right Shoulder Yaw", "Right Elbow",
-          "Right Wrist Roll", "Right Wrist Pitch", "Right Wrist Yaw",
-        };
         bool any_high = false;
         std::string high_temp_msg = "Warning! High temperature at ";
         std::string high_temp_print_msg = "Warning! High temperature at ";
         bool first = true;
-        for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+        for (int i = 0; i < NUM_MOTOR; ++i) {
           if (motor_high_temp_[i]) {
             any_high = true;
             int16_t t = std::max(unitree_joint_state[i].temperature()[0],
                                  unitree_joint_state[i].temperature()[1]);
             if (!first) { high_temp_msg += ", "; high_temp_print_msg += ", "; }
-            high_temp_msg += joint_names_hw[i];
-            high_temp_print_msg += std::string(joint_names_hw[i]) + "(" + std::to_string(t) + ")";
+            high_temp_msg += JOINT_DISPLAY_NAMES[i];
+            high_temp_print_msg += JOINT_DISPLAY_NAMES[i] + "(" + std::to_string(t) + ")";
             first = false;
           }
         }
@@ -2906,19 +2908,21 @@ class G1Deploy {
       std::array<double, 7> right_hand_q = {0.0};
       std::array<double, 7> right_hand_dq = {0.0};
       
-      auto left_hand_state_ptr = dex3_hands_.getState(true);
-      if (left_hand_state_ptr) {
-        for (int i = 0; i < 7; ++i) {
-          left_hand_q[i] = left_hand_state_ptr->motor_state()[i].q();
-          left_hand_dq[i] = left_hand_state_ptr->motor_state()[i].dq();
+      if constexpr (ROBOT_HAS_DEX3_HANDS) {
+        auto left_hand_state_ptr = dex3_hands_.getState(true);
+        if (left_hand_state_ptr) {
+          for (int i = 0; i < 7; ++i) {
+            left_hand_q[i] = left_hand_state_ptr->motor_state()[i].q();
+            left_hand_dq[i] = left_hand_state_ptr->motor_state()[i].dq();
+          }
         }
-      }
-      
-      auto right_hand_state_ptr = dex3_hands_.getState(false);
-      if (right_hand_state_ptr) {
-        for (int i = 0; i < 7; ++i) {
-          right_hand_q[i] = right_hand_state_ptr->motor_state()[i].q();
-          right_hand_dq[i] = right_hand_state_ptr->motor_state()[i].dq();
+
+        auto right_hand_state_ptr = dex3_hands_.getState(false);
+        if (right_hand_state_ptr) {
+          for (int i = 0; i < 7; ++i) {
+            right_hand_q[i] = right_hand_state_ptr->motor_state()[i].q();
+            right_hand_dq[i] = right_hand_state_ptr->motor_state()[i].dq();
+          }
         }
       }
 
@@ -3099,7 +3103,7 @@ class G1Deploy {
      * Converts the double-precision observation buffer to float, copies it
      * into the PolicyEngine's pinned input buffer, runs TensorRT inference,
      * then maps the action output (IsaacLab order) to a MotorCommand
-     * (hardware order) using `g1_action_scale` and `default_angles`.
+     * (hardware order) using `action_scale` and `default_angles`.
      */
     bool CreatePolicyCommand() {
       // Convert double observation to float and populate policy's internal input buffer
@@ -3119,8 +3123,8 @@ class G1Deploy {
       float* floatarr = action_buffer.data();
       
       MotorCommand motor_command_tmp;
-      for (int i = 0; i < G1_NUM_MOTOR; i++) {
-        const double action_value = static_cast<double>(floatarr[isaaclab_to_mujoco[i]]) * g1_action_scale[i];
+      for (int i = 0; i < NUM_MOTOR; i++) {
+        const double action_value = static_cast<double>(floatarr[isaaclab_to_mujoco[i]]) * action_scale[i];
         last_action[i] = static_cast<double>(floatarr[i]);
         motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i] + action_value);
         motor_command_tmp.tau_ff.at(i) = 0.0;
@@ -3276,7 +3280,7 @@ class G1Deploy {
                 (*planner_motion_file_) << planner_motion_->BodyQuaternions(frame)[0][2] << ",";
                 (*planner_motion_file_) << planner_motion_->BodyQuaternions(frame)[0][3] << ",";
 
-                for(int i = 0; i < 29; i++) {
+                for(int i = 0; i < NUM_MOTOR; i++) {
                   (*planner_motion_file_) << planner_motion_->JointPositions(frame)[isaaclab_to_mujoco[i]] << ",";
                 }
 
@@ -3573,8 +3577,8 @@ class G1Deploy {
               planner_motion_->SetEncodeMode(initial_encoder_mode_);
               // Get base quaternion and joint positions from robot state
               std::array<double, 4> base_quat = float_to_double<4>(ls->imu_state().quaternion());
-              std::array<double, 29> joint_positions;
-              for (int i = 0; i < G1_NUM_MOTOR; i++) {
+              std::array<double, NUM_MOTOR> joint_positions;
+              for (int i = 0; i < NUM_MOTOR; i++) {
                 joint_positions[i] = ls->motor_state()[i].q();
               }
               // Initialize planner with robot state
@@ -3860,24 +3864,13 @@ class G1Deploy {
             report_temperature_ = false;
             const auto ls = used_low_state_data_.data;
             if (ls) {
-              static const char* joint_names[] = {
-                "Left Hip Pitch", "Left Hip Roll", "Left Hip Yaw", "Left Knee",
-                "Left Ankle Pitch", "Left Ankle Roll", "Right Hip Pitch", "Right Hip Roll",
-                "Right Hip Yaw", "Right Knee", "Right Ankle Pitch", "Right Ankle Roll",
-                "Waist Yaw", "Waist Roll", "Waist Pitch",
-                "Left Shoulder Pitch", "Left Shoulder Roll", "Left Shoulder Yaw", "Left Elbow",
-                "Left Wrist Roll", "Left Wrist Pitch", "Left Wrist Yaw",
-                "Right Shoulder Pitch", "Right Shoulder Roll", "Right Shoulder Yaw", "Right Elbow",
-                "Right Wrist Roll", "Right Wrist Pitch", "Right Wrist Yaw",
-              };
-
               // Print full report to console with joint names
               std::cout << "\n[Temperature Report] Motor temperatures (winding / driver):" << std::endl;
-              std::array<std::pair<int16_t, int>, G1_NUM_MOTOR> max_temps;
-              for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+              std::array<std::pair<int16_t, int>, NUM_MOTOR> max_temps;
+              for (int i = 0; i < NUM_MOTOR; ++i) {
                 auto temp = ls->motor_state()[i].temperature();
                 std::cout << "  " << std::setw(2) << i << " " << std::setw(22) << std::left
-                          << joint_names[i] << std::right << ": "
+                          << JOINT_DISPLAY_NAMES[i] << std::right << ": "
                           << std::setw(4) << temp[0] << " / " << std::setw(4) << temp[1] << std::endl;
                 max_temps[i] = {std::max(temp[0], temp[1]), i};
               }
@@ -3887,10 +3880,10 @@ class G1Deploy {
               std::sort(max_temps.begin(), max_temps.end(),
                         [](const auto& a, const auto& b) { return a.first > b.first; });
               std::string tts = "Hottest motors: ";
-              for (int k = 0; k < 3 && k < G1_NUM_MOTOR; ++k) {
+              for (int k = 0; k < 3 && k < NUM_MOTOR; ++k) {
                 auto [temp_val, idx] = max_temps[k];
                 if (k > 0) tts += ", ";
-                tts += std::string(joint_names[idx]) + " " + std::to_string(temp_val);
+                tts += JOINT_DISPLAY_NAMES[idx] + " " + std::to_string(temp_val);
               }
               pending_tts_ = tts;
             }
@@ -3950,12 +3943,14 @@ class G1Deploy {
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 
-          // Update Dex3 hands max close ratio from keyboard-controlled value (X/C keys)
-          dex3_hands_.SetMaxCloseRatio(input_interface_->GetMaxCloseRatio());
-          
-          // set hand poses (use buffered data for consistency)
-          dex3_hands_.setAllJointsCommand(true, left_hand_joint_buffer_);
-          dex3_hands_.setAllJointsCommand(false, right_hand_joint_buffer_);
+          if constexpr (ROBOT_HAS_DEX3_HANDS) {
+            // Update Dex3 hands max close ratio from keyboard-controlled value (X/C keys)
+            dex3_hands_.SetMaxCloseRatio(input_interface_->GetMaxCloseRatio());
+
+            // set hand poses (use buffered data for consistency)
+            dex3_hands_.setAllJointsCommand(true, left_hand_joint_buffer_);
+            dex3_hands_.setAllJointsCommand(false, right_hand_joint_buffer_);
+          }
           
           // Update last hand actions for logging (use buffered data)
           for (int i = 0; i < 7; ++i) {
@@ -4015,7 +4010,7 @@ class G1Deploy {
             (*target_motion_file_) << current_motion_copy->BodyQuaternions(current_frame_copy)[0][2] << ",";
             (*target_motion_file_) << current_motion_copy->BodyQuaternions(current_frame_copy)[0][3] << ",";
 
-            for(int i = 0; i < 29; i++) {
+            for(int i = 0; i < NUM_MOTOR; i++) {
               (*target_motion_file_) << current_motion_copy->JointPositions(current_frame_copy)[isaaclab_to_mujoco[i]] << ",";
             }
 
@@ -4072,7 +4067,9 @@ class G1Deploy {
             }
             
             // Print hand max close ratio (keyboard-controlled via X/C keys)
-            std::cout << " | HandCloseRatio: " << dex3_hands_.GetMaxCloseRatio();
+            if constexpr (ROBOT_HAS_DEX3_HANDS) {
+              std::cout << " | HandCloseRatio: " << dex3_hands_.GetMaxCloseRatio();
+            }
             
             std::cout << std::endl;
           }

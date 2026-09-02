@@ -104,11 +104,11 @@ class ErrorMonitor {
   int reminder_interval_ = 2500;
   int reminder_counter_ = 0;
 
-  /// Hardware-order joint name, from the selected robot's JOINT_NAMES table.
+  /// Hardware-order joint name for display, from the selected robot's table.
   /// Returns by reference so the 500 Hz caller allocates nothing.
   static const std::string& jointName(int index) {
     static const std::string kUnknown = "Unknown";
-    if (index >= 0 && index < NUM_MOTOR) return JOINT_NAMES[index];
+    if (index >= 0 && index < NUM_MOTOR) return JOINT_DISPLAY_NAMES[index];
     return kUnknown;
   }
 };

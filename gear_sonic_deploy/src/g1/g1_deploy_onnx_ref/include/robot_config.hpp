@@ -35,7 +35,8 @@
 
   using MotorCommand = H2MotorCommand;
 
-  inline const auto& JOINT_NAMES        = H2_JOINT_NAMES;
+  inline const auto& JOINT_NAMES         = H2_JOINT_NAMES;
+  inline const auto& JOINT_DISPLAY_NAMES = H2_JOINT_DISPLAY_NAMES;
   inline const auto& kps                = h2_kps;
   inline const auto& kds                = h2_kds;
   inline const auto& action_scale       = h2_action_scale;
@@ -79,7 +80,8 @@
   constexpr int NUM_LOWER_BODY_JOINTS = 12;
   constexpr int NUM_WRIST_JOINTS = 6;
 
-  inline const auto& JOINT_NAMES  = G1_JOINT_NAMES;
+  inline const auto& JOINT_NAMES         = G1_JOINT_NAMES;
+  inline const auto& JOINT_DISPLAY_NAMES = G1_JOINT_DISPLAY_NAMES;
   inline const auto& action_scale = g1_action_scale;
   // kps, kds, default_angles, isaaclab_to_mujoco, mujoco_to_isaaclab,
   // vr_*point_index and the {upper,lower,wrist}_body_joint_* vectors are

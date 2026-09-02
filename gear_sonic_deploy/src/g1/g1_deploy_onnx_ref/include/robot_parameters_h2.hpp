@@ -101,4 +101,16 @@ static const std::array<std::string, H2_NUM_MOTOR> H2_JOINT_NAMES = {
     "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow",
     "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw"};
 
+/// Human-readable names, spoken by the TTS high-temperature warning. See the
+/// note on G1_JOINT_DISPLAY_NAMES.
+static const std::array<std::string, H2_NUM_MOTOR> H2_JOINT_DISPLAY_NAMES = {
+    "Left Hip Pitch", "Left Hip Roll", "Left Hip Yaw", "Left Knee",
+    "Left Ankle Roll", "Left Ankle Pitch", "Right Hip Pitch", "Right Hip Roll",
+    "Right Hip Yaw", "Right Knee", "Right Ankle Roll", "Right Ankle Pitch",
+    "Waist Yaw", "Waist Roll", "Waist Pitch", "Head Pitch",
+    "Head Yaw", "Left Shoulder Pitch", "Left Shoulder Roll", "Left Shoulder Yaw",
+    "Left Elbow", "Left Wrist Roll", "Left Wrist Pitch", "Left Wrist Yaw",
+    "Right Shoulder Pitch", "Right Shoulder Roll", "Right Shoulder Yaw", "Right Elbow",
+    "Right Wrist Roll", "Right Wrist Pitch", "Right Wrist Yaw"};
+
 #endif // ROBOT_PARAMETERS_H2_HPP

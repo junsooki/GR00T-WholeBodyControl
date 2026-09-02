@@ -86,17 +86,30 @@ enum G1JointIndex {
   RightWristYaw = 28 // NOTE INVALID for g1 23dof
 };
 
-/// Joint names in hardware order. Single source of truth -- this table was
-/// previously duplicated in error_monitor.hpp and twice in g1_deploy_onnx_ref.cpp.
+/// Joint identifiers in hardware order, matching g1_29dof.xml's actuator names.
+/// Single source of truth -- this was previously duplicated in error_monitor.hpp
+/// and twice in g1_deploy_onnx_ref.cpp.
 static const std::array<std::string, G1_NUM_MOTOR> G1_JOINT_NAMES = {
-    "LeftHipPitch", "LeftHipRoll", "LeftHipYaw", "LeftKnee",
-    "LeftAnklePitch", "LeftAnkleRoll",
-    "RightHipPitch", "RightHipRoll", "RightHipYaw", "RightKnee",
-    "RightAnklePitch", "RightAnkleRoll",
-    "WaistYaw", "WaistRoll", "WaistPitch",
-    "LeftShoulderPitch", "LeftShoulderRoll", "LeftShoulderYaw", "LeftElbow",
-    "LeftWristRoll", "LeftWristPitch", "LeftWristYaw",
-    "RightShoulderPitch", "RightShoulderRoll", "RightShoulderYaw", "RightElbow",
-    "RightWristRoll", "RightWristPitch", "RightWristYaw"};
+    "left_hip_pitch", "left_hip_roll", "left_hip_yaw", "left_knee",
+    "left_ankle_pitch", "left_ankle_roll", "right_hip_pitch", "right_hip_roll",
+    "right_hip_yaw", "right_knee", "right_ankle_pitch", "right_ankle_roll",
+    "waist_yaw", "waist_roll", "waist_pitch", "left_shoulder_pitch",
+    "left_shoulder_roll", "left_shoulder_yaw", "left_elbow", "left_wrist_roll",
+    "left_wrist_pitch", "left_wrist_yaw", "right_shoulder_pitch", "right_shoulder_roll",
+    "right_shoulder_yaw", "right_elbow", "right_wrist_roll", "right_wrist_pitch",
+    "right_wrist_yaw"};
+
+/// Human-readable names, spoken by the TTS high-temperature warning and printed
+/// in the motor temperature report. Kept separate from the identifiers above so
+/// those can match the MJCF exactly without the TTS saying "leftankleroll".
+static const std::array<std::string, G1_NUM_MOTOR> G1_JOINT_DISPLAY_NAMES = {
+    "Left Hip Pitch", "Left Hip Roll", "Left Hip Yaw", "Left Knee",
+    "Left Ankle Pitch", "Left Ankle Roll", "Right Hip Pitch", "Right Hip Roll",
+    "Right Hip Yaw", "Right Knee", "Right Ankle Pitch", "Right Ankle Roll",
+    "Waist Yaw", "Waist Roll", "Waist Pitch", "Left Shoulder Pitch",
+    "Left Shoulder Roll", "Left Shoulder Yaw", "Left Elbow", "Left Wrist Roll",
+    "Left Wrist Pitch", "Left Wrist Yaw", "Right Shoulder Pitch", "Right Shoulder Roll",
+    "Right Shoulder Yaw", "Right Elbow", "Right Wrist Roll", "Right Wrist Pitch",
+    "Right Wrist Yaw"};
 
 #endif // ROBOT_PARAMETERS_HPP
