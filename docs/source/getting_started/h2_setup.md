@@ -92,6 +92,26 @@ To record instead (useful over SSH — set `MUJOCO_GL=egl` for headless renderin
 MUJOCO_GL=egl .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py --seconds 12 --video h2.mp4
 ```
 
+### Teleoperation
+
+The `teleop` head takes three targets — left hand, right hand, head — plus a
+lower-body reference, so the legs read a frozen standing pose while the arms
+follow the targets. Like the static case this needs **no motion data**:
+
+```bash
+.venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
+    --reference teleop --onnx h2_policy/onnx/model_step_100000_teleop.onnx --viewer
+```
+
+With no input the targets sit at the robot's own default pose, so it stands as
+it is. `--wave` drives them with a scripted lift-and-wave to confirm the arms
+respond; commanding a 0.30 m hand lift produces a 0.30 m lift at the wrist.
+
+`TeleopReference` takes a `target_fn(t)` returning `left`/`right`/`head` position
+offsets in the pelvis frame, plus optional `*_quat` orientations. That is the
+hook a live Pico feed plugs into — replace `wave_targets` with a reader for your
+headset and controllers.
+
 ### Playing reference motions
 
 Once you have an H2 motion library, point the runner at it:
@@ -122,6 +142,37 @@ The observation layout is the part that is easy to get subtly wrong, and a wrong
 layout is obvious: swapping any two proprioception blocks makes the robot diverge
 within a second, while the correct layout stays up indefinitely. If you change
 observation assembly, re-run the 30 s static case as a regression check.
+
+## Known issue: unconstrained head
+
+The v1.1 reward set (`local_feet_acc_energy_5pt`) is entirely body-level — there
+is no joint-position tracking term in it at all — so any joint that drives no
+tracked body is unconstrained in position. G1 has no head, so this never
+surfaced. On H2 it left `head_yaw` free, and on the step-100000 checkpoint it
+settles at **+1.02 rad (58 degrees off-axis)** while every other joint stays
+within 0.36 rad of default. Nothing pulls it back: `anti_shake_ang_vel`
+penalises only the head's *velocity*, `joint_limit` does not fire until 1.745
+rad, and once parked the joint costs no energy.
+
+There are two fixes, and you probably want both.
+
+**At inference (works on the checkpoint you already have).** The runner commands
+the head joints directly and holds them level and forward. The head drives no
+tracked body and carries no load, so overriding it is safe: measured gaze goes
+from `[0.33, 0.94, -0.02]` to `[0.99, 0.16, -0.05]` with pelvis height unchanged
+(1.024 -> 1.023). This is on by default; pass `--no-face-forward` to see the raw
+policy output. `head_target(t)` in the runner is where a headset's pitch and yaw
+go if you want the robot's head to follow the operator.
+
+**In training (needs a fresh run).** `sonic_h2.yaml` now lists `head_yaw_link`
+among the tracked `body_names`, which constrains both head joints through the
+existing body position and orientation rewards. Two caveats:
+
+- It only takes effect on a **fresh training run**. Checkpoints trained before
+  this change still drift.
+- It does **not** change the exported ONNX interface — the encoders read
+  joint-level and anchor terms only, so encoder 1791 / decoder 1054 are
+  unaffected. The critic observation does change.
 
 ## Path B: C++/TensorRT deployment
 

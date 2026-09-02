@@ -235,6 +235,7 @@ class H2Spec:
         # Isaac Lab ordered copies, for building observations and applying actions.
         self.action_scale_il = self.action_scale_mj[self.il_to_mj]
         self.default_il = self.default_mj[self.il_to_mj]
+        self.head_mj = np.array([self.mj_joints.index(j) for j in ("head_pitch", "head_yaw")])
 
     def mj_to_il_vec(self, v):
         return np.asarray(v)[self.il_to_mj]
@@ -361,6 +362,102 @@ class MotionLibReference:
         return self.joint_pos[idx], self.joint_vel[idx], self.root_quat[idx]
 
 
+class TeleopReference:
+    """Upper body from 3-point VR targets, lower body from a frozen standing pose.
+
+    This is the reference for the ``teleop`` head, and it needs no motion data:
+    the legs read a constant standing reference (in distribution thanks to
+    ``freeze_frame_aug``) while the arms follow three targets -- left hand, right
+    hand, head -- exactly as they would from a headset and two controllers.
+
+    Targets are expressed in the reference anchor (pelvis) frame. The defaults
+    are the robot's own default pose, computed by forward kinematics, so with no
+    input the command reads "stand as you are".
+
+    ``target_fn(t) -> dict`` optionally overrides targets per step, with keys
+    ``left``/``right``/``head`` holding a 3-vector position offset (metres, in
+    the pelvis frame) and optionally ``*_quat`` for a wxyz orientation. This is
+    the hook a live Pico feed plugs into.
+    """
+
+    name = "teleop"
+    SIZE = 6 + 240 + 9 + 12
+
+    # commands/terms/motion.yaml: vr_3point_body and vr_3point_body_offset.
+    BODIES = ["left_wrist_yaw_link", "right_wrist_yaw_link", "torso_link"]
+    OFFSETS = np.array([[0.18, -0.025, 0.0], [0.18, 0.025, 0.0], [0.0, 0.0, 0.35]])
+
+    def __init__(self, spec, model, mujoco, target_fn=None):
+        self.spec = spec
+        self.target_fn = target_fn
+        self.duration = float("inf")
+
+        # Lower body reference: the 12 leg joints of the default pose, held.
+        # commands.py indexes the Isaac Lab ordered dof vector with
+        # isaaclab_to_mujoco_dof[:12], i.e. the legs in MuJoCo order.
+        self.lower_idx = np.asarray([spec.mj_to_il[i] for i in range(12)])
+        lower_pos = spec.default_il[self.lower_idx]
+        self.lower_block = np.concatenate([
+            np.tile(lower_pos, NUM_FUTURE_FRAMES),          # 120 positions
+            np.zeros(NUM_FUTURE_FRAMES * 12),               # 120 velocities
+        ])
+
+        # Default 3-point targets, by forward kinematics on the default pose.
+        data = mujoco.MjData(model)
+        data.qpos[:3] = [0.0, 0.0, INIT_HEIGHT]
+        data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        data.qpos[7:] = spec.default_mj
+        mujoco.mj_forward(model, data)
+        anchor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+        anchor_pos, anchor_quat = data.xpos[anchor].copy(), data.xquat[anchor].copy()
+        inv = quat_inv(anchor_quat)
+
+        pos, orn = [], []
+        for body, offset in zip(self.BODIES, self.OFFSETS):
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body)
+            world = data.xpos[bid] + quat_to_mat(data.xquat[bid]) @ offset
+            pos.append(quat_apply(inv, world - anchor_pos))
+            orn.append(quat_mul(inv, data.xquat[bid].copy()))
+        self.default_pos = np.array(pos)     # (3, 3), pelvis frame
+        self.default_orn = np.array(orn)     # (3, 4), wxyz
+
+    def reference_block(self, t, anchor_heading_quat):
+        pos = self.default_pos.copy()
+        orn = self.default_orn.copy()
+        if self.target_fn is not None:
+            override = self.target_fn(t) or {}
+            for i, key in enumerate(("left", "right", "head")):
+                if key in override:
+                    pos[i] = pos[i] + np.asarray(override[key], dtype=np.float64)
+                if f"{key}_quat" in override:
+                    orn[i] = np.asarray(override[f"{key}_quat"], dtype=np.float64)
+        # Reference anchor is upright and aligned with the robot heading, so the
+        # heading-normalised anchor orientation is identity.
+        anchor_ori = rot6d(np.array([1.0, 0.0, 0.0, 0.0]))
+        return np.concatenate([anchor_ori, self.lower_block, pos.reshape(-1), orn.reshape(-1)])
+
+
+def head_target(t):
+    """Commanded (head_pitch, head_yaw) in radians. Zero is level and forward.
+
+    Replace this with the headset's pitch and yaw to have the robot's head follow
+    the operator.
+    """
+    return np.array([0.0, 0.0])
+
+
+def wave_targets(t):
+    """A scripted stand-in for a live VR feed: raise both hands, then wave."""
+    if t < 1.5:
+        return {}
+    lift = min((t - 1.5) / 2.0, 1.0)
+    swing = 0.10 * math.sin(2.0 * math.pi * 0.5 * max(t - 3.5, 0.0))
+    return {
+        "left": [0.05 * lift, 0.0, 0.30 * lift + swing],
+        "right": [0.05 * lift, 0.0, 0.30 * lift - swing],
+    }
+
+
 # --------------------------------------------------------------------------
 # Observation assembly
 # --------------------------------------------------------------------------
@@ -473,6 +570,9 @@ def run(args):
 
     if args.reference == "static":
         reference = StaticReference(spec)
+    elif args.reference == "teleop":
+        reference = TeleopReference(spec, model, mujoco,
+                                    target_fn=wave_targets if args.wave else None)
     else:
         if not args.motion_file:
             raise SystemExit("--reference motion requires --motion-file")
@@ -490,15 +590,19 @@ def run(args):
     action = np.zeros(NUM_DOF)
     obs.reset(data, action)
 
+    ref_size = TeleopReference.SIZE if args.reference == "teleop" else 680
     proprio = obs.proprioception()
-    if proprio.size + 680 != expected:
+    if proprio.size + ref_size != expected:
         raise SystemExit(
-            f"observation size mismatch: built {proprio.size + 680}, "
-            f"{os.path.basename(args.onnx)} expects {expected}"
+            f"observation size mismatch: built {proprio.size + ref_size}, "
+            f"{os.path.basename(args.onnx)} expects {expected}.\n"
+            f"  --reference {args.reference} needs the "
+            f"{'teleop' if args.reference == 'teleop' else 'g1'} head; pass the matching --onnx."
         )
     print(f"model      {os.path.basename(args.onnx)}  input {expected}  "
-          f"(reference 680 + proprioception {proprio.size})")
+          f"(reference {ref_size} + proprioception {proprio.size})")
     print(f"reference  {reference.name}" + (f"  '{reference.key}'" if args.reference == "motion" else ""))
+    print(f"head       {'held forward' if not args.no_face_forward else 'raw policy output'}")
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
           f"control 1/{DECIMATION} of {1 / SIM_DT:.0f} Hz = {1 / (SIM_DT * DECIMATION):.0f} Hz")
 
@@ -520,16 +624,24 @@ def run(args):
         for step in range(n_control):
             t = step * SIM_DT * DECIMATION
             heading = heading_quat(data.qpos[3:7])
-            ref_jp, ref_jv, ref_quat = reference.sample(t, heading)
+            if args.reference == "teleop":
+                ref_block = reference.reference_block(t, heading)
+            else:
+                ref_jp, ref_jv, ref_quat = reference.sample(t, heading)
+                ref_block = obs.reference(ref_jp, ref_jv, ref_quat, heading)
 
-            model_in = np.concatenate([
-                obs.reference(ref_jp, ref_jv, ref_quat, heading),
-                obs.proprioception(),
-            ]).astype(np.float32)[None, :]
+            model_in = np.concatenate([ref_block, obs.proprioception()]).astype(np.float32)[None, :]
             action = session.run(None, {in_name: model_in})[0][0].astype(np.float64)
             action = np.clip(action, -ACTION_CLIP, ACTION_CLIP)
 
             target_mj = spec.il_to_mj_vec(action * spec.action_scale_il + spec.default_il)
+            if not args.no_face_forward:
+                # The head is unconstrained by the reward set, so the policy parks
+                # head_yaw around 1.0 rad. Nothing downstream depends on it -- the
+                # head drives no tracked body and carries no load -- so the target
+                # is commanded directly. head_target is where a headset orientation
+                # would be written in a real teleop loop.
+                target_mj[spec.head_mj] = head_target(t)
             for _ in range(DECIMATION):
                 torque = spec.kp * (target_mj - data.qpos[7:]) - spec.kd * data.qvel[6:]
                 data.ctrl[:] = np.clip(torque, -spec.effort_limit, spec.effort_limit)
@@ -572,11 +684,17 @@ def main(argv=None):
     p.add_argument("--onnx", default=os.path.join(REPO_ROOT, "h2_policy", "onnx",
                                                   "model_step_100000_g1.onnx"),
                    help="fused per-mode ONNX head; the g1 head is the motion-tracking one")
-    p.add_argument("--reference", choices=["static", "motion"], default="static")
+    p.add_argument("--reference", choices=["static", "motion", "teleop"], default="static")
+    p.add_argument("--wave", action="store_true",
+                   help="teleop only: drive the hand targets with a scripted lift-and-wave "
+                        "instead of holding the default pose")
     p.add_argument("--motion-file", help="motion-library PKL from convert_h2_csv_to_motion_lib.py")
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
+    p.add_argument("--no-face-forward", action="store_true",
+                   help="do not override the head joints; show the policy's raw head output, "
+                        "which drifts because no reward constrains head position")
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer")

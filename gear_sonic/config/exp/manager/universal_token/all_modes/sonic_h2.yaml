@@ -76,9 +76,26 @@ manager_env:
     motion:
       reward_point_body: ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
       reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
-      # 14 tracked bodies; feet corrected to H2's distal ankle body (see above).
+      # 15 tracked bodies; feet corrected to H2's distal ankle body (see above).
       # Every entry of reward_point_body must also appear here -- commands.py:158
       # does body_names.index(name) and raises otherwise.
+      #
+      # head_yaw_link is an H2 addition. The v1.1 reward set is entirely
+      # body-level -- there is no joint-position term anywhere in
+      # local_feet_acc_energy_5pt -- so a joint that drives no tracked body is
+      # unconstrained in position. G1 has no head, so this never came up. On H2
+      # it left head_yaw free: anti_shake_ang_vel penalises only its velocity,
+      # joint_limit does not fire until 1.745 rad, and energy costs nothing once
+      # the joint is parked. Measured on the step-100000 checkpoint, head_yaw
+      # settles at +1.02 rad -- the robot stares 58 degrees off-axis while every
+      # other joint stays within 0.36 rad of default.
+      #
+      # head_yaw_link is the distal head body, so tracking its position and
+      # orientation constrains head_pitch and head_yaw both. This does not change
+      # the exported ONNX interface: the encoders read joint-level and anchor
+      # terms only, so encoder 1791 / decoder 1054 are unaffected. It does change
+      # the critic observation, and it only takes effect on a fresh training run
+      # -- the existing checkpoint still exhibits the drift.
       body_names: [
         "pelvis",
         "left_hip_roll_link",
@@ -94,6 +111,7 @@ manager_env:
         "right_shoulder_roll_link",
         "right_elbow_link",
         "right_wrist_yaw_link",
+        "head_yaw_link",
       ]
       num_future_frames: 10
       dt_future_ref_frames: 0.1
