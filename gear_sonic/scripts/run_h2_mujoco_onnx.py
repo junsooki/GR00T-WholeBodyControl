@@ -48,9 +48,11 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import math
 import os
 import sys
+import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 
@@ -606,23 +608,41 @@ def run(args):
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
           f"control 1/{DECIMATION} of {1 / SIM_DT:.0f} Hz = {1 / (SIM_DT * DECIMATION):.0f} Hz")
 
+    control_dt = SIM_DT * DECIMATION
+    # With the viewer open and no explicit --seconds, run until the window is
+    # closed: capping at 30 s meant the window vanished on its own.
+    if args.seconds:
+        horizon = args.seconds
+    elif args.viewer:
+        horizon = float("inf")
+    else:
+        horizon = min(reference.duration, 30.0)
+    n_control = None if math.isinf(horizon) else int(horizon / control_dt)
+    print(f"horizon    {'until the viewer window is closed' if n_control is None else '%.1f s' % horizon}"
+          + ("   (real time)" if args.viewer else ""))
+
     frames = []
-    renderer = None
-    if args.video:
-        renderer = mujoco.Renderer(model, height=args.render_height, width=args.render_width)
-    viewer_ctx = None
-    if args.viewer:
-        import mujoco.viewer
-
-        viewer_ctx = mujoco.viewer.launch_passive(model, data)
-
-    horizon = args.seconds if args.seconds else min(reference.duration, 30.0)
-    n_control = int(horizon / (SIM_DT * DECIMATION))
     heights, fell_at = [], None
 
-    try:
-        for step in range(n_control):
-            t = step * SIM_DT * DECIMATION
+    with contextlib.ExitStack() as stack:
+        renderer = None
+        if args.video:
+            renderer = stack.enter_context(
+                mujoco.Renderer(model, height=args.render_height, width=args.render_width))
+        viewer_ctx = None
+        if args.viewer:
+            import mujoco.viewer
+
+            # Entered as a context manager: closing it by hand and letting the
+            # object be collected afterwards tears the GL context down twice and
+            # segfaults on exit.
+            viewer_ctx = stack.enter_context(mujoco.viewer.launch_passive(model, data))
+
+        wall_start = time.perf_counter()
+        step = -1
+        while n_control is None or step + 1 < n_control:
+            step += 1
+            t = step * control_dt
             heading = heading_quat(data.qpos[3:7])
             if args.reference == "teleop":
                 ref_block = reference.reference_block(t, heading)
@@ -659,9 +679,11 @@ def run(args):
                 if not viewer_ctx.is_running():
                     break
                 viewer_ctx.sync()
-    finally:
-        if viewer_ctx is not None:
-            viewer_ctx.close()
+                # Pace to wall clock. Without this the whole run finishes in a
+                # couple of seconds and the window flashes past.
+                behind = (t + control_dt) - (time.perf_counter() - wall_start)
+                if behind > 0:
+                    time.sleep(behind)
 
     heights = np.asarray(heights)
     print()
