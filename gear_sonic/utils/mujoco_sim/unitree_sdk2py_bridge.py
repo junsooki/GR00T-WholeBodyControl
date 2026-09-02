@@ -18,7 +18,16 @@ from unitree_sdk2py.idl.default import (
     unitree_hg_msg_dds__HandState_ as HandState_default,
 )
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
-from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, OdoState_
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_
+
+# OdoState_ is absent from unitree_sdk2py 1.0.1, and importing it unconditionally
+# took the whole simulator down for every robot. Nothing consumes it -- the C++
+# deployment never subscribes to rt/odostate -- so publishing odometry is
+# optional and its absence should not stop the sim from running.
+try:
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import OdoState_
+except ImportError:
+    OdoState_ = None
 
 
 class UnitreeSdk2Bridge:
@@ -35,7 +44,9 @@ class UnitreeSdk2Bridge:
         robot_type = config["ROBOT_TYPE"]
         # H2 speaks the same hg IDL and topics as G1; only the motor count in the
         # message differs, and that comes from NUM_MOTORS below.
-        if "g1" in robot_type or "h1-2" in robot_type or "h2" in robot_type:
+        if OdoState_ is not None and (
+            "g1" in robot_type or "h1-2" in robot_type or "h2" in robot_type
+        ):
             from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__IMUState_ as IMUState_default,
                 unitree_hg_msg_dds__LowCmd_,
@@ -186,10 +197,11 @@ class UnitreeSdk2Bridge:
             raise NotImplementedError("Frame sensor data is not implemented yet.")
         else:
             # Get data from ground truth
-            self.odo_state.position[:] = obs["floating_base_pose"][:3]
-            self.odo_state.linear_velocity[:] = obs["floating_base_vel"][:3]
-            self.odo_state.orientation[:] = obs["floating_base_pose"][3:7]
-            self.odo_state.angular_velocity[:] = obs["floating_base_vel"][3:6]
+            if self.odo_state is not None:
+                self.odo_state.position[:] = obs["floating_base_pose"][:3]
+                self.odo_state.linear_velocity[:] = obs["floating_base_vel"][:3]
+                self.odo_state.orientation[:] = obs["floating_base_pose"][3:7]
+                self.odo_state.angular_velocity[:] = obs["floating_base_vel"][3:6]
             # quaternion: w, x, y, z
             self.low_state.imu_state.quaternion[:] = obs["floating_base_pose"][3:7]
             # angular velocity
@@ -206,8 +218,9 @@ class UnitreeSdk2Bridge:
         self.low_state.tick = int(obs["time"] * 1e3)
         self.low_state_puber.Write(self.low_state)
 
-        self.odo_state.tick = int(obs["time"] * 1e3)
-        self.odo_state_puber.Write(self.odo_state)
+        if self.odo_state_puber is not None:
+            self.odo_state.tick = int(obs["time"] * 1e3)
+            self.odo_state_puber.Write(self.odo_state)
 
         self.torso_imu_puber.Write(self.torso_imu_state)
 
