@@ -495,7 +495,21 @@ class PicoSource:
     HEAD_PITCH_RANGE = (-0.50, 0.80)
     HEAD_YAW_RANGE = (-1.70, 1.70)
 
-    def __init__(self, position_gain=1.0, max_offset=0.6, track_head=True):
+    # A target may not move faster than this. Tracking drops out, and without a
+    # limit the offsets snap straight back to the default pose in one control
+    # step -- a 0.3 m discontinuity that whips the arms hard enough to topple the
+    # robot. Human hands do not exceed ~2 m/s in normal teleoperation, so this
+    # bounds the damage without being felt.
+    MAX_TARGET_SPEED = 2.0   # m/s
+    MAX_HEAD_SPEED = 4.0     # rad/s
+
+    # Hand targets are clamped to this. Measured, not guessed: with both arms
+    # driven to the clamp in every axis at once, the robot topples at 0.40 m and
+    # above (falling at 3.3-5.8 s) and stays up at 0.35 and below. The legs only
+    # ever track a frozen standing reference, so a large enough arm command moves
+    # the centre of mass further than the balance controller can answer.
+    # test_h2_teleop_scenarios.py reproduces the sweep.
+    def __init__(self, position_gain=1.0, max_offset=0.35, track_head=True):
         try:
             import xrobotoolkit_sdk as xrt
         except ImportError as exc:
@@ -517,6 +531,9 @@ class PicoSource:
         self.live = False
         self._warned = False
         self._prev_a = False
+        self._last = {}          # last commanded offsets, held through dropouts
+        self._last_head = np.zeros(2)
+        self._last_t = None
         xrt.init()
 
     @staticmethod
@@ -580,18 +597,30 @@ class PicoSource:
             return {}
         current = self._read()
         if not self.live:
-            # Tracking dropped: hold the default stance rather than acting on
-            # whatever the service last put in the buffer.
+            # Tracking dropped. Hold the last commanded targets rather than
+            # snapping to the default pose: the robot keeps the arms where they
+            # were instead of yanking them back, which is both safer and what an
+            # operator expects from a brief dropout.
             if not self._warned:
-                print("  [pico] tracking lost -- holding default stance")
+                print("  [pico] tracking lost -- holding last targets")
                 self._warned = True
-            return {}
+            return dict(self._last)
         self._warned = False
+
+        step = self.MAX_TARGET_SPEED * (SIM_DT * DECIMATION)
         out = {}
         for key in ("left", "right"):
             delta = (current[key][0] - self.zero[key][0]) * self.gain
-            out[key] = np.clip(delta, -self.max_offset, self.max_offset)
-        return out
+            delta = np.clip(delta, -self.max_offset, self.max_offset)
+            prev = self._last.get(key)
+            if prev is not None:
+                move = delta - prev
+                dist = float(np.linalg.norm(move))
+                if dist > step:
+                    delta = prev + move * (step / dist)
+            out[key] = delta
+        self._last = out
+        return dict(out)
 
     def head(self, t):
         """(head_pitch, head_yaw) in radians, relative to the zeroed pose."""
@@ -599,14 +628,22 @@ class PicoSource:
             return np.zeros(2)
         head_rot = self._read()["head"][1]
         if not self.live:
-            return np.zeros(2)
+            return self._last_head.copy()
         pitch, yaw = self._pitch_yaw(head_rot)
         zero_pitch, zero_yaw = self.zero["head"][1]
-        return np.array([
+        target = np.array([
             np.clip(pitch - zero_pitch, *self.HEAD_PITCH_RANGE),
             np.clip(math.atan2(math.sin(yaw - zero_yaw), math.cos(yaw - zero_yaw)),
                     *self.HEAD_YAW_RANGE),
         ])
+        # Rate-limited for the same reason as the hands.
+        step = self.MAX_HEAD_SPEED * (SIM_DT * DECIMATION)
+        move = target - self._last_head
+        dist = float(np.linalg.norm(move))
+        if dist > step:
+            target = self._last_head + move * (step / dist)
+        self._last_head = target
+        return target
 
     def close(self):
         with contextlib.suppress(Exception):
