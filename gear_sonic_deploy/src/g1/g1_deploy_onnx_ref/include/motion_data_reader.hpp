@@ -40,7 +40,7 @@
 #include <regex>
 
 #include "../include/fk.hpp"
-#include "../include/policy_parameters.hpp"
+#include "../include/robot_config.hpp"
 #include "../include/math_utils.hpp"
 
 /**

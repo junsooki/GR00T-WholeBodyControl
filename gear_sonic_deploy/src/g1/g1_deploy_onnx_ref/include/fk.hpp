@@ -21,7 +21,13 @@ struct XMLNode;
 
 /**
  * @class RobotFK
- * @brief Forward kinematics solver for the G1 robot, initialised from a MuJoCo XML.
+ * @brief Forward kinematics solver, initialised from a MuJoCo MJCF.
+ *
+ * Robot-agnostic: every number (joint axes, body translations, rest rotations,
+ * the child lists) is parsed from the XML it is handed, so a different robot is
+ * a different file, not different code. The one robot-specific dependency is
+ * the isaaclab_to_mujoco permutation used to index joint_angles in FKChildren,
+ * which comes from robot_config.hpp and so follows the build's robot.
  */
 class RobotFK
 {

@@ -16,7 +16,7 @@
 
 #include "fk.hpp"
 #include "../include/math_utils.hpp"
-#include "../include/policy_parameters.hpp"
+#include "../include/robot_config.hpp"
 
 #include <sstream>
 

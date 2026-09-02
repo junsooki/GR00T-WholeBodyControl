@@ -31,12 +31,7 @@
 #include <array>
 #include <string>
 
-// ---------------------------------------------------------------------------
-// Unitree SDK DDS topic names. Same as G1 -- both robots speak the hg IDL.
-// ---------------------------------------------------------------------------
-static const std::string H2_HG_CMD_TOPIC = "rt/lowcmd";
-static const std::string H2_HG_IMU_TORSO = "rt/secondary_imu";
-static const std::string H2_HG_STATE_TOPIC = "rt/lowstate";
+#include "robot_common.hpp"
 
 /// Total number of actuated joints on H2.
 const int H2_NUM_MOTOR = 31;

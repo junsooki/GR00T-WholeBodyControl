@@ -33,6 +33,7 @@
 #define POLICY_PARAMETERS_HPP
 
 #include <array>
+#include <vector>
 
 const double ONE_DEGREE = 0.0174533;  ///< One degree in radians.
 

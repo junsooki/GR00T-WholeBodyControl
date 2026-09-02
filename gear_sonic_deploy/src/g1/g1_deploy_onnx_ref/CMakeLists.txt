@@ -232,6 +232,58 @@ else()
   message(STATUS "ROS2 not found - building without ROS2InputHandler support")
 endif()
 
+# ---------------------------------------------------------------------------
+# H2 variant.
+#
+# NUM_MOTOR is a std::array bound in sixteen places, including every member of
+# MotorCommand, which is copied through a DataBuffer on the 500 Hz command path.
+# So the robot is chosen at compile time (robot_config.hpp switches on ROBOT_H2)
+# rather than at runtime, and each robot gets its own binary. One binary drives
+# one robot over one DDS interface, so there is nothing to gain from supporting
+# both at once -- and this way the checkpoint-dimension guard in
+# control_policy.hpp cannot be bypassed by passing the wrong model.
+#
+# The static library has to be duplicated rather than shared: fk.cpp and
+# state_logger.cpp are both in PROJECT_SRCS and both pull in the robot's
+# parameter tables, so they compile differently per robot.
+# ---------------------------------------------------------------------------
+set(H2_EXECUTABLE_NAME h2_deploy_onnx_ref)
+
+add_library(h2_deploy_shared STATIC ${PROJECT_SRCS})
+target_include_directories(h2_deploy_shared PUBLIC ${EXE_INCLUDES})
+target_compile_definitions(h2_deploy_shared PUBLIC ROBOT_H2=1)
+
+add_executable(${H2_EXECUTABLE_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/src/g1_deploy_onnx_ref.cpp)
+target_include_directories(${H2_EXECUTABLE_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/ ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(${H2_EXECUTABLE_NAME} PRIVATE ROBOT_H2=1)
+target_link_directories(${H2_EXECUTABLE_NAME} PRIVATE ${CUDA_LINK_DIRS})
+target_link_libraries(
+  ${H2_EXECUTABLE_NAME} PRIVATE ${PROJECT_NAME}
+  h2_deploy_shared
+  audio_thread
+  unitree_sdk2 ZLIB::ZLIB
+  onnxruntime::onnxruntime TRTInference
+  CUDA::cudart
+  ${TensorRT_nvinfer_LIBRARY} ${TensorRT_nvonnxparser_LIBRARY}
+  ${CUDLA_LIBRARY}
+  ${ZMQ_LIBRARY}
+)
+set_target_properties(
+  ${H2_EXECUTABLE_NAME}
+  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
+             OUTPUT_NAME ${H2_EXECUTABLE_NAME}
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+
+if(rclcpp_FOUND AND std_msgs_FOUND)
+  target_include_directories(${H2_EXECUTABLE_NAME} PRIVATE ${ROS2_INCLUDE_DIRS} ${MSGPACK_INCLUDE_DIRS})
+  target_link_libraries(${H2_EXECUTABLE_NAME} PRIVATE ${ROS2_LIBS} pthread)
+  target_compile_definitions(${H2_EXECUTABLE_NAME} PRIVATE HAS_ROS2=1)
+else()
+  target_compile_definitions(${H2_EXECUTABLE_NAME} PRIVATE HAS_ROS2=0)
+endif()
+
 # test executable:
 include(FetchContent)
 

@@ -20,13 +20,9 @@
 #define ROBOT_PARAMETERS_HPP
 
 #include <array>
+#include <string>
 
-// ---------------------------------------------------------------------------
-// Unitree SDK DDS topic names
-// ---------------------------------------------------------------------------
-static const std::string HG_CMD_TOPIC = "rt/lowcmd";       ///< Low-level motor command topic.
-static const std::string HG_IMU_TORSO = "rt/secondary_imu";///< Secondary (torso) IMU topic.
-static const std::string HG_STATE_TOPIC = "rt/lowstate";    ///< Low-level motor / sensor state topic.
+#include "robot_common.hpp"
 
 /// Total number of actuated joints on the G1 (29-DOF configuration).
 const int G1_NUM_MOTOR = 29;
@@ -41,43 +37,8 @@ struct MotorCommand {
     std::array<float, G1_NUM_MOTOR> q_target = {};   ///< Target position (rad).
     std::array<float, G1_NUM_MOTOR> dq_target = {};  ///< Target velocity (rad/s).
     std::array<float, G1_NUM_MOTOR> kp = {};          ///< Position gain (Nm/rad).
-    std::array<float, G1_NUM_MOTOR> kd = {};          ///< Velocity gain (Nm·s/rad).
+    std::array<float, G1_NUM_MOTOR> kd = {};          ///< Velocity gain (Nm*s/rad).
     std::array<float, G1_NUM_MOTOR> tau_ff = {};      ///< Feed-forward torque (Nm).
-};
-
-/**
- * @brief Bundled heading state for thread-safe access via DataBuffer.
- *
- * Captures both the initial IMU base quaternion (set when heading is
- * reinitialised) and a user-adjustable delta heading offset (adjusted via
- * keyboard Q/E or D-pad).
- */
-struct HeadingState {
-    std::array<double, 4> init_base_quat;  ///< Captured IMU base quaternion (w,x,y,z) at init.
-    double delta_heading;                   ///< Cumulative heading offset (radians).
-    
-    HeadingState(const std::array<double, 4>& quat = {1.0, 0.0, 0.0, 0.0}, double delta = 0.0)
-        : init_base_quat(quat), delta_heading(delta) {}
-};
-
-/**
- * @brief High-level operator signals (set by input interfaces, read by control loop).
- */
-struct OperatorState {
-  bool stop = false;   ///< Emergency stop requested.
-  bool start = false;  ///< Control-system start requested.
-  bool play = false;   ///< Motion playback active.
-};
-
-/**
- * @brief Ankle actuation mode.
- *
- * The G1's ankle uses a coupled 2-DOF mechanism that can be controlled
- * in series (pitch/roll) or parallel (A/B motor) modes.
- */
-enum class Mode {
-  PR = 0, ///< Series control for Pitch / Roll joints.
-  AB = 1  ///< Parallel control for A / B motors.
 };
 
 /**
@@ -124,5 +85,18 @@ enum G1JointIndex {
   RightWristPitch = 27, // NOTE INVALID for g1 23dof
   RightWristYaw = 28 // NOTE INVALID for g1 23dof
 };
+
+/// Joint names in hardware order. Single source of truth -- this table was
+/// previously duplicated in error_monitor.hpp and twice in g1_deploy_onnx_ref.cpp.
+static const std::array<std::string, G1_NUM_MOTOR> G1_JOINT_NAMES = {
+    "LeftHipPitch", "LeftHipRoll", "LeftHipYaw", "LeftKnee",
+    "LeftAnklePitch", "LeftAnkleRoll",
+    "RightHipPitch", "RightHipRoll", "RightHipYaw", "RightKnee",
+    "RightAnklePitch", "RightAnkleRoll",
+    "WaistYaw", "WaistRoll", "WaistPitch",
+    "LeftShoulderPitch", "LeftShoulderRoll", "LeftShoulderYaw", "LeftElbow",
+    "LeftWristRoll", "LeftWristPitch", "LeftWristYaw",
+    "RightShoulderPitch", "RightShoulderRoll", "RightShoulderYaw", "RightElbow",
+    "RightWristRoll", "RightWristPitch", "RightWristYaw"};
 
 #endif // ROBOT_PARAMETERS_HPP
