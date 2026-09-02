@@ -108,9 +108,51 @@ it is. `--wave` drives them with a scripted lift-and-wave to confirm the arms
 respond; commanding a 0.30 m hand lift produces a 0.30 m lift at the wrist.
 
 `TeleopReference` takes a `target_fn(t)` returning `left`/`right`/`head` position
-offsets in the pelvis frame, plus optional `*_quat` orientations. That is the
-hook a live Pico feed plugs into — replace `wave_targets` with a reader for your
-headset and controllers.
+offsets in the pelvis frame, plus optional `*_quat` orientations.
+
+#### Live PICO teleoperation
+
+`PicoSource` drives those targets from a PICO headset and controllers through
+XRoboToolkit. One-time build of the SDK for this interpreter (the vendored copy
+ships the headers and `libPXREARobotSDK.so`, so nothing is downloaded):
+
+```bash
+uv pip install --python .venv/bin/python pybind11
+cmake -S external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64 -B build/xrsdk \
+      -Dpybind11_DIR=$(.venv/bin/python -c 'import pybind11;print(pybind11.get_cmake_dir())') \
+      -DPYTHON_EXECUTABLE=$PWD/.venv/bin/python -DCMAKE_BUILD_TYPE=Release
+cmake --build build/xrsdk -j8
+cp build/xrsdk/xrobotoolkit_sdk.cpython-311-*.so .venv/lib/python3.11/site-packages/
+```
+
+With the XRoboToolkit PC service running and the headset connected:
+
+```bash
+.venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
+    --reference teleop --onnx h2_policy/onnx/model_step_100000_teleop.onnx --pico --viewer
+```
+
+Stand in the robot's stance — arms relaxed, facing forward — and press **A** on
+the right controller to zero. Targets are deltas from that zero, so where you
+stand in the play space does not matter, and nothing is commanded until you
+press it. Press **A** again any time to re-zero. `--pico-gain` scales operator
+hand travel to robot hand travel; `--pico-no-head` keeps the head level instead
+of following the headset.
+
+```{note}
+The SDK reports poses as `[x, y, z, qx, qy, qz, qw]` — the quaternion is
+**xyzw**, while the rest of the codebase is wxyz. OpenXR is also Y-up with -Z
+forward against the robot's Z-up, +X forward, so positions and orientations are
+both changed of basis. `PicoSource.XR_TO_ROBOT` does this and is unit-tested
+against the three axes.
+```
+
+```{warning}
+With no headset connected the service returns all-zero poses, quaternion
+included. `PicoSource` rejects those rather than treating them as a real pose,
+so a device that never connected — or drops out mid-session — leaves the robot
+holding its default stance instead of being commanded from a stale buffer.
+```
 
 ### Playing reference motions
 
@@ -160,9 +202,9 @@ There are two fixes, and you probably want both.
 the head joints directly and holds them level and forward. The head drives no
 tracked body and carries no load, so overriding it is safe: measured gaze goes
 from `[0.33, 0.94, -0.02]` to `[0.99, 0.16, -0.05]` with pelvis height unchanged
-(1.024 -> 1.023). This is on by default; pass `--no-face-forward` to see the raw
-policy output. `head_target(t)` in the runner is where a headset's pitch and yaw
-go if you want the robot's head to follow the operator.
+(1.024 -> 1.023). This is unconditional. `head_target(t)` in the runner is where
+a headset's pitch and yaw go if you want the robot's head to follow the
+operator.
 
 **In training (needs a fresh run).** `sonic_h2.yaml` now lists `head_yaw_link`
 among the tracked `body_names`, which constrains both head joints through the

@@ -461,6 +461,152 @@ def wave_targets(t):
 
 
 # --------------------------------------------------------------------------
+# Live teleoperation from a PICO headset
+# --------------------------------------------------------------------------
+class PicoSource:
+    """3-point targets from a PICO headset and controllers, via XRoboToolkit.
+
+    Supplies both hooks the runner exposes: ``targets(t)`` feeds
+    ``TeleopReference.target_fn`` and ``head(t)`` replaces ``head_target``.
+
+    Requires the XRoboToolkit PC service to be running and ``xrobotoolkit_sdk``
+    importable. The SDK reports poses as ``[x, y, z, qx, qy, qz, qw]`` -- note
+    the quaternion is *xyzw*, while everything else here is wxyz.
+
+    Frames: OpenXR is Y-up with -Z forward, the robot is Z-up with +X forward,
+    so positions and orientations are both changed of basis by ``XR_TO_ROBOT``.
+
+    Nothing is commanded until the operator zeroes the pose with the A button.
+    Targets are deltas from that zero, so the robot holds its default stance
+    until you move, regardless of where you are standing in the play space.
+    """
+
+    # robot_x = -xr_z (forward), robot_y = -xr_x (left), robot_z = +xr_y (up)
+    XR_TO_ROBOT = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    # H2 head joint ranges from h2.xml, less a small margin.
+    HEAD_PITCH_RANGE = (-0.50, 0.80)
+    HEAD_YAW_RANGE = (-1.70, 1.70)
+
+    def __init__(self, position_gain=1.0, max_offset=0.6, track_head=True):
+        try:
+            import xrobotoolkit_sdk as xrt
+        except ImportError as exc:
+            raise SystemExit(
+                "xrobotoolkit_sdk is not importable.\n"
+                "  Build it for this interpreter with:\n"
+                "    uv pip install --python .venv/bin/python pybind11\n"
+                "    cmake -S external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64 \\\n"
+                "          -B build/xrsdk -Dpybind11_DIR=$(.venv/bin/python -c "
+                "'import pybind11;print(pybind11.get_cmake_dir())')\n"
+                "    cmake --build build/xrsdk -j8\n"
+                "  then copy the resulting .so into .venv/lib/python3.11/site-packages/."
+            ) from exc
+        self.xrt = xrt
+        self.gain = position_gain
+        self.max_offset = max_offset
+        self.track_head = track_head
+        self.zero = None
+        self.live = False
+        self._warned = False
+        self._prev_a = False
+        xrt.init()
+
+    @staticmethod
+    def _is_live(pose):
+        """True if the SDK is actually reporting a pose.
+
+        With no headset connected the service returns all zeros, including a
+        zero quaternion. Treating that as a real pose would mean a device that
+        never connected -- or one that drops out mid-session -- silently
+        commands the arms, so it is rejected here instead.
+        """
+        return abs(np.linalg.norm(np.asarray(pose, dtype=np.float64)[3:]) - 1.0) < 0.1
+
+    @classmethod
+    def _to_robot(cls, pose):
+        """SDK pose -> (position in robot frame, rotation matrix in robot frame)."""
+        pose = np.asarray(pose, dtype=np.float64)
+        pos = cls.XR_TO_ROBOT @ pose[:3]
+        wxyz = np.array([pose[6], pose[3], pose[4], pose[5]])  # xyzw -> wxyz
+        rot = cls.XR_TO_ROBOT @ quat_to_mat(wxyz) @ cls.XR_TO_ROBOT.T
+        return pos, rot
+
+    def _read(self):
+        raw = {
+            "left": self.xrt.get_left_controller_pose(),
+            "right": self.xrt.get_right_controller_pose(),
+            "head": self.xrt.get_headset_pose(),
+        }
+        self.live = all(self._is_live(v) for v in raw.values())
+        return {k: self._to_robot(v) for k, v in raw.items()}
+
+    @staticmethod
+    def _pitch_yaw(rot):
+        forward = rot[:, 0]
+        yaw = math.atan2(forward[1], forward[0])
+        pitch = -math.asin(np.clip(forward[2], -1.0, 1.0))
+        return pitch, yaw
+
+    def set_zero(self):
+        """Capture the current pose as the origin. Call with arms in the robot's stance."""
+        current = self._read()
+        if not self.live:
+            print("  [pico] no tracking data -- is the headset connected and streaming?")
+            return False
+        self.zero = {k: (p.copy(), self._pitch_yaw(r)) for k, (p, r) in current.items()}
+        return True
+
+    def poll(self):
+        """Refresh state. Returns True once a zero has been captured.
+
+        The A button (re)zeroes, on the press edge rather than while held.
+        """
+        pressed = bool(self.xrt.get_A_button())
+        if pressed and not self._prev_a and self.set_zero():
+            print("  [pico] zeroed")
+        self._prev_a = pressed
+        return self.zero is not None
+
+    def targets(self, t):
+        if self.zero is None:
+            return {}
+        current = self._read()
+        if not self.live:
+            # Tracking dropped: hold the default stance rather than acting on
+            # whatever the service last put in the buffer.
+            if not self._warned:
+                print("  [pico] tracking lost -- holding default stance")
+                self._warned = True
+            return {}
+        self._warned = False
+        out = {}
+        for key in ("left", "right"):
+            delta = (current[key][0] - self.zero[key][0]) * self.gain
+            out[key] = np.clip(delta, -self.max_offset, self.max_offset)
+        return out
+
+    def head(self, t):
+        """(head_pitch, head_yaw) in radians, relative to the zeroed pose."""
+        if self.zero is None or not self.track_head:
+            return np.zeros(2)
+        head_rot = self._read()["head"][1]
+        if not self.live:
+            return np.zeros(2)
+        pitch, yaw = self._pitch_yaw(head_rot)
+        zero_pitch, zero_yaw = self.zero["head"][1]
+        return np.array([
+            np.clip(pitch - zero_pitch, *self.HEAD_PITCH_RANGE),
+            np.clip(math.atan2(math.sin(yaw - zero_yaw), math.cos(yaw - zero_yaw)),
+                    *self.HEAD_YAW_RANGE),
+        ])
+
+    def close(self):
+        with contextlib.suppress(Exception):
+            self.xrt.close()
+
+
+# --------------------------------------------------------------------------
 # Observation assembly
 # --------------------------------------------------------------------------
 class History:
@@ -570,11 +716,17 @@ def run(args):
     in_name = session.get_inputs()[0].name
     expected = session.get_inputs()[0].shape[-1]
 
+    pico = None
     if args.reference == "static":
         reference = StaticReference(spec)
     elif args.reference == "teleop":
-        reference = TeleopReference(spec, model, mujoco,
-                                    target_fn=wave_targets if args.wave else None)
+        target_fn = None
+        if args.pico:
+            pico = PicoSource(position_gain=args.pico_gain, track_head=not args.pico_no_head)
+            target_fn = pico.targets
+        elif args.wave:
+            target_fn = wave_targets
+        reference = TeleopReference(spec, model, mujoco, target_fn=target_fn)
     else:
         if not args.motion_file:
             raise SystemExit("--reference motion requires --motion-file")
@@ -604,7 +756,14 @@ def run(args):
     print(f"model      {os.path.basename(args.onnx)}  input {expected}  "
           f"(reference {ref_size} + proprioception {proprio.size})")
     print(f"reference  {reference.name}" + (f"  '{reference.key}'" if args.reference == "motion" else ""))
-    print(f"head       {'held forward' if not args.no_face_forward else 'raw policy output'}")
+    print("head       " + ("following the headset" if (pico and not args.pico_no_head)
+                            else "commanded level and forward"))
+    if pico is not None:
+        print()
+        print("  Stand in the robot's stance -- arms relaxed, facing forward -- and press A")
+        print("  on the right controller to zero. Press A again at any time to re-zero.")
+        print("  Nothing is commanded until you do.")
+        print()
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
           f"control 1/{DECIMATION} of {1 / SIM_DT:.0f} Hz = {1 / (SIM_DT * DECIMATION):.0f} Hz")
 
@@ -629,6 +788,8 @@ def run(args):
         if args.video:
             renderer = stack.enter_context(
                 mujoco.Renderer(model, height=args.render_height, width=args.render_width))
+        if pico is not None:
+            stack.callback(pico.close)
         viewer_ctx = None
         if args.viewer:
             import mujoco.viewer
@@ -643,6 +804,8 @@ def run(args):
         while n_control is None or step + 1 < n_control:
             step += 1
             t = step * control_dt
+            if pico is not None:
+                pico.poll()
             heading = heading_quat(data.qpos[3:7])
             if args.reference == "teleop":
                 ref_block = reference.reference_block(t, heading)
@@ -655,13 +818,12 @@ def run(args):
             action = np.clip(action, -ACTION_CLIP, ACTION_CLIP)
 
             target_mj = spec.il_to_mj_vec(action * spec.action_scale_il + spec.default_il)
-            if not args.no_face_forward:
-                # The head is unconstrained by the reward set, so the policy parks
-                # head_yaw around 1.0 rad. Nothing downstream depends on it -- the
-                # head drives no tracked body and carries no load -- so the target
-                # is commanded directly. head_target is where a headset orientation
-                # would be written in a real teleop loop.
-                target_mj[spec.head_mj] = head_target(t)
+            # The head is unconstrained by the reward set, so the policy parks
+            # head_yaw around 1.0 rad and the robot stares 58 degrees off-axis.
+            # Nothing downstream depends on it -- the head drives no tracked body
+            # and carries no load -- so the target is always commanded directly.
+            # head_target is where a headset orientation goes in a teleop loop.
+            target_mj[spec.head_mj] = pico.head(t) if pico is not None else head_target(t)
             for _ in range(DECIMATION):
                 torque = spec.kp * (target_mj - data.qpos[7:]) - spec.kd * data.qvel[6:]
                 data.ctrl[:] = np.clip(torque, -spec.effort_limit, spec.effort_limit)
@@ -707,6 +869,13 @@ def main(argv=None):
                                                   "model_step_100000_g1.onnx"),
                    help="fused per-mode ONNX head; the g1 head is the motion-tracking one")
     p.add_argument("--reference", choices=["static", "motion", "teleop"], default="static")
+    p.add_argument("--pico", action="store_true",
+                   help="teleop only: drive the hand and head targets from a PICO headset via "
+                        "XRoboToolkit (the PC service must be running)")
+    p.add_argument("--pico-gain", type=float, default=1.0,
+                   help="scale from operator hand travel to robot hand travel")
+    p.add_argument("--pico-no-head", action="store_true",
+                   help="hold the head level and forward instead of following the headset")
     p.add_argument("--wave", action="store_true",
                    help="teleop only: drive the hand targets with a scripted lift-and-wave "
                         "instead of holding the default pose")
@@ -714,9 +883,6 @@ def main(argv=None):
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
-    p.add_argument("--no-face-forward", action="store_true",
-                   help="do not override the head joints; show the policy's raw head output, "
-                        "which drifts because no reward constrains head position")
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer")
