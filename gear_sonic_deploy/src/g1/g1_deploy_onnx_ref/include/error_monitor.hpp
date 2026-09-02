@@ -3,7 +3,7 @@
  * @brief Monitors motor error states from LowState and prints warnings on
  *        state transitions, with periodic reminders for persistent faults.
  *
- * The G1 robot reports per-motor fault codes via the `motorstate()` field in
+ * The robot reports per-motor fault codes via the `motorstate()` field in
  * each MotorState_ message (part of LowState_ on topic `rt/lowstate`).  A
  * non-zero value indicates a motor fault.
  *
@@ -21,8 +21,9 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <string>
 
-#include "robot_parameters.hpp"
+#include "robot_config.hpp"
 
 /**
  * @class ErrorMonitor
@@ -47,8 +48,8 @@ class ErrorMonitor {
    * @brief Check motor error states, print on transitions and periodic reminders.
    * @param motorstates Array of motorstate error codes, one per motor.
    */
-  void update(const std::array<uint32_t, G1_NUM_MOTOR>& motorstates) {
-    for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+  void update(const std::array<uint32_t, NUM_MOTOR>& motorstates) {
+    for (int i = 0; i < NUM_MOTOR; ++i) {
       uint32_t state = motorstates[i];
       if (state != prev_motorstate_[i]) {
         if (state != 0 && prev_motorstate_[i] == 0) {
@@ -80,7 +81,7 @@ class ErrorMonitor {
         reminder_counter_ = 0;
         std::cout << "[ErrorMonitor] " << error_count_
                   << " motor(s) still faulted:";
-        for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+        for (int i = 0; i < NUM_MOTOR; ++i) {
           if (prev_motorstate_[i] != 0) {
             std::cout << " " << jointName(i) << "(0x" << std::hex
                       << prev_motorstate_[i] << std::dec << ")";
@@ -98,44 +99,16 @@ class ErrorMonitor {
   bool hasErrors() const { return error_count_ > 0; }
 
  private:
-  std::array<uint32_t, G1_NUM_MOTOR> prev_motorstate_;
+  std::array<uint32_t, NUM_MOTOR> prev_motorstate_;
   int error_count_ = 0;
   int reminder_interval_ = 2500;
   int reminder_counter_ = 0;
 
-  static const char* jointName(int index) {
-    static const char* names[] = {
-      "LeftHipPitch",       // 0
-      "LeftHipRoll",        // 1
-      "LeftHipYaw",         // 2
-      "LeftKnee",           // 3
-      "LeftAnklePitch",     // 4
-      "LeftAnkleRoll",      // 5
-      "RightHipPitch",      // 6
-      "RightHipRoll",       // 7
-      "RightHipYaw",        // 8
-      "RightKnee",          // 9
-      "RightAnklePitch",    // 10
-      "RightAnkleRoll",     // 11
-      "WaistYaw",           // 12
-      "WaistRoll",          // 13
-      "WaistPitch",         // 14
-      "LeftShoulderPitch",  // 15
-      "LeftShoulderRoll",   // 16
-      "LeftShoulderYaw",    // 17
-      "LeftElbow",          // 18
-      "LeftWristRoll",      // 19
-      "LeftWristPitch",     // 20
-      "LeftWristYaw",       // 21
-      "RightShoulderPitch", // 22
-      "RightShoulderRoll",  // 23
-      "RightShoulderYaw",   // 24
-      "RightElbow",         // 25
-      "RightWristRoll",     // 26
-      "RightWristPitch",    // 27
-      "RightWristYaw",      // 28
-    };
-    if (index >= 0 && index < G1_NUM_MOTOR) return names[index];
-    return "Unknown";
+  /// Hardware-order joint name, from the selected robot's JOINT_NAMES table.
+  /// Returns by reference so the 500 Hz caller allocates nothing.
+  static const std::string& jointName(int index) {
+    static const std::string kUnknown = "Unknown";
+    if (index >= 0 && index < NUM_MOTOR) return JOINT_NAMES[index];
+    return kUnknown;
   }
 };

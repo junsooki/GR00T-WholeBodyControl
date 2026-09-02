@@ -77,7 +77,7 @@ public:
         movement_direction_values_.resize(3, 0.0f);
         facing_direction_values_.resize(3, 0.0f);
         random_seed_values_.resize(1);
-        context_qpos_values_.resize(4 * (G1_NUM_MOTOR + 7));
+        context_qpos_values_.resize(4 * (NUM_MOTOR + 7));
 
         {
             // version 1
@@ -108,6 +108,8 @@ public:
         num_pred_frames_values_.clear();
         
         // Initialize output vectors with defaults
+        // 36 = the checkpoint's qpos stride (7 root + 29 G1 joints); see the
+        // "Robot support" note in localmotion_kplanner.hpp.
         mujoco_qpos_values_.resize(64 * 36);
         num_pred_frames_values_.resize(1);
 

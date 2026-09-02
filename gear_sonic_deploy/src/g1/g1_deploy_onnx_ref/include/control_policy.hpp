@@ -9,7 +9,8 @@
  * ## I/O Contract
  *
  *   - **Input**: single tensor `obs_dict` (float32, dimension = policy obs size).
- *   - **Output**: single tensor `action` (float32, dimension = G1_NUM_MOTOR = 29).
+ *   - **Output**: single tensor `action` (float32, dimension = NUM_MOTOR --
+ *     29 on G1, 31 on H2).
  *
  * ## Typical Usage
  *
@@ -33,7 +34,7 @@
 #include <numeric>
 #include <cuda_runtime.h>
 #include <TRTInference/InferenceEngine.h>
-#include "robot_parameters.hpp"
+#include "robot_config.hpp"
 
 /**
  * @class PolicyEngine
@@ -163,10 +164,16 @@ public:
         );
       }
 
-      // Validate action dimension matches robot configuration
-      if (config_.action_dimension != G1_NUM_MOTOR) {
-        std::cerr << "✗ Policy action dimension (" << config_.action_dimension 
-                  << ") doesn't match G1 robot motors (" << G1_NUM_MOTOR << ")" << std::endl;
+      // Validate action dimension matches robot configuration.
+      // This is the only check that catches a checkpoint trained for the other
+      // robot: G1 and H2 policies differ here (29 vs 31 actions) and nowhere
+      // else the loader can see, so a mismatch must stop initialization rather
+      // than silently drive the wrong joints.
+      if (config_.action_dimension != NUM_MOTOR) {
+        std::cerr << "✗ Policy action dimension mismatch: model emits "
+                  << config_.action_dimension << " actions, but this binary is built for '"
+                  << ROBOT_NAME << "' with " << NUM_MOTOR << " motors." << std::endl;
+        std::cerr << "  Wrong checkpoint for this robot: " << model_path << std::endl;
         inference_engine_.reset();
         return false;
       }
