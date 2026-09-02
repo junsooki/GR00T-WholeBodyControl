@@ -59,6 +59,12 @@
   inline const auto& wrist_joint_isaaclab_order_in_isaaclab_index      = h2_wrist_joint_isaaclab_order_in_isaaclab_index;
   inline const auto& wrist_joint_isaaclab_order_in_mujoco_index        = h2_wrist_joint_isaaclab_order_in_mujoco_index;
 
+  inline const auto& HARDWARE_TO_MJCF = H2_HARDWARE_TO_MUJOCO;
+  inline const auto& MJCF_TO_HARDWARE = H2_MUJOCO_TO_HARDWARE;
+  /// H2's DDS motor order differs from its MJCF actuator order for 17 of 31
+  /// joints, so the two must be converted at the DDS boundary.
+  constexpr bool ROBOT_DDS_ORDER_MATCHES_MJCF = false;
+
   /// H2 drives its ankles directly; there is no coupled PR/AB mechanism.
   constexpr bool ROBOT_HAS_COUPLED_ANKLE = false;
   /// No H2 planner checkpoint exists, and the planner's qpos stride is
@@ -87,6 +93,15 @@
   // vr_*point_index and the {upper,lower,wrist}_body_joint_* vectors are
   // already declared under neutral names by policy_parameters.hpp.
 
+  /// G1's DDS motor order and MJCF actuator order coincide, so both maps are the
+  /// identity and every conversion below is a no-op.
+  constexpr std::array<int, G1_NUM_MOTOR> G1_IDENTITY_ORDER = {
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+      15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
+  inline const auto& HARDWARE_TO_MJCF = G1_IDENTITY_ORDER;
+  inline const auto& MJCF_TO_HARDWARE = G1_IDENTITY_ORDER;
+  constexpr bool ROBOT_DDS_ORDER_MATCHES_MJCF = true;
+
   constexpr bool ROBOT_HAS_COUPLED_ANKLE = true;
   constexpr bool ROBOT_HAS_PLANNER = true;
   constexpr bool ROBOT_HAS_DEX3_HANDS = true;
@@ -95,9 +110,44 @@
 
 #endif
 
+
+// ---------------------------------------------------------------------------
+// DDS order conversion.
+//
+// Everything inside this binary -- policy output, gains, default angles, action
+// scale, logging -- is in MJCF/policy order. Only the bytes crossing DDS are in
+// the robot's hardware motor order. These two helpers are the single place that
+// distinction is expressed, so the direction can be checked in one spot rather
+// than at every subscript.
+//
+// On G1 both maps are the identity, so these compile away to `return i`.
+// ---------------------------------------------------------------------------
+
+/// MJCF/policy joint index -> DDS motor index. Use when WRITING a command.
+inline constexpr int ToDdsIndex(int mjcf_index) {
+  return MJCF_TO_HARDWARE[mjcf_index];
+}
+
+/// DDS motor index -> MJCF/policy joint index. Use when READING a state.
+inline constexpr int FromDdsIndex(int dds_index) {
+  return HARDWARE_TO_MJCF[dds_index];
+}
+
 static_assert(NUM_UPPER_BODY_JOINTS + NUM_LOWER_BODY_JOINTS == NUM_MOTOR,
               "upper + lower body joint counts must cover every motor");
 static_assert(NUM_BODIES == NUM_MOTOR + 1,
               "every body but the root carries exactly one joint");
+
+// A wrong permutation here moves the wrong joint on a real robot, so verify the
+// two maps invert each other rather than trusting the tables.
+constexpr bool kOrderMapsAreInverses = [] {
+  for (int i = 0; i < NUM_MOTOR; ++i) {
+    if (HARDWARE_TO_MJCF[MJCF_TO_HARDWARE[i]] != i) return false;
+    if (MJCF_TO_HARDWARE[HARDWARE_TO_MJCF[i]] != i) return false;
+  }
+  return true;
+}();
+static_assert(kOrderMapsAreInverses,
+              "HARDWARE_TO_MJCF and MJCF_TO_HARDWARE must be mutual inverses");
 
 #endif // ROBOT_CONFIG_HPP

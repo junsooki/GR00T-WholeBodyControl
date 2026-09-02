@@ -2671,13 +2671,16 @@ class G1Deploy {
 
       const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetDataWithTime().data;
       if (mc) {
+        // i indexes MotorCommand, which is MJCF/policy order; motor_cmd() is DDS
+        // motor order. Identical on G1, but 17 of 31 joints differ on H2.
         for (size_t i = 0; i < NUM_MOTOR; i++) {
-          dds_low_command.motor_cmd().at(i).mode() = 1; // 1:Enable, 0:Disable
-          dds_low_command.motor_cmd().at(i).tau() = mc->tau_ff.at(i);
-          dds_low_command.motor_cmd().at(i).q() = mc->q_target.at(i);
-          dds_low_command.motor_cmd().at(i).dq() = mc->dq_target.at(i);
-          dds_low_command.motor_cmd().at(i).kp() = mc->kp.at(i);
-          dds_low_command.motor_cmd().at(i).kd() = mc->kd.at(i);
+          const size_t d = ToDdsIndex(static_cast<int>(i));
+          dds_low_command.motor_cmd().at(d).mode() = 1; // 1:Enable, 0:Disable
+          dds_low_command.motor_cmd().at(d).tau() = mc->tau_ff.at(i);
+          dds_low_command.motor_cmd().at(d).q() = mc->q_target.at(i);
+          dds_low_command.motor_cmd().at(d).dq() = mc->dq_target.at(i);
+          dds_low_command.motor_cmd().at(d).kp() = mc->kp.at(i);
+          dds_low_command.motor_cmd().at(d).kd() = mc->kd.at(i);
         }
 
         dds_low_command.crc() = Crc32Core((uint32_t*)&dds_low_command, (sizeof(dds_low_command) >> 2) - 1);
@@ -2752,7 +2755,7 @@ class G1Deploy {
       if (time_ < duration_) {
         for (int i = 0; i < NUM_MOTOR; i++) {
           double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
-          double current_pos = ls->motor_state()[i].q();
+          double current_pos = ls->motor_state()[ToDdsIndex(i)].q(); // DDS -> MJCF
           motor_command_tmp.q_target.at(i) =
               static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
         }
@@ -2838,9 +2841,11 @@ class G1Deploy {
       std::array<double, NUM_MOTOR> motor_error = {0.0};
       std::array<double, NUM_MOTOR> motor_torque = {0.0};
       for (int i = 0; i < NUM_MOTOR; i++) {
-        body_q[i] =
-            unitree_joint_state[mujoco_to_isaaclab[i]].q() - default_angles[mujoco_to_isaaclab[i]]; // URDF order
-        body_dq[i] = unitree_joint_state[mujoco_to_isaaclab[i]].dq(); // URDF order
+        // mujoco_to_isaaclab[i] is an MJCF index; the joint state is DDS-ordered,
+        // so it needs converting. default_angles stays MJCF-indexed.
+        const int mj = mujoco_to_isaaclab[i];
+        body_q[i] = unitree_joint_state[ToDdsIndex(mj)].q() - default_angles[mj];
+        body_dq[i] = unitree_joint_state[ToDdsIndex(mj)].dq();
         if (body_dq[i] > 35 && !disable_crc_check_) {
           std::cout << "✗ Error: body_dq[" << i << "] = " << body_dq[i] << " > 35."
                     << std::endl;
@@ -3579,7 +3584,7 @@ class G1Deploy {
               std::array<double, 4> base_quat = float_to_double<4>(ls->imu_state().quaternion());
               std::array<double, NUM_MOTOR> joint_positions;
               for (int i = 0; i < NUM_MOTOR; i++) {
-                joint_positions[i] = ls->motor_state()[i].q();
+                joint_positions[i] = ls->motor_state()[ToDdsIndex(i)].q(); // DDS -> MJCF
               }
               // Initialize planner with robot state
               if(!planner_->Initialize(base_quat, joint_positions)) {
