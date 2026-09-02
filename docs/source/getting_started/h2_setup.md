@@ -243,13 +243,74 @@ incomplete** — see the status table below before starting.
 
 ### Prerequisites
 
-Everything in [Installation (Deployment)](installation_deploy.md) applies:
-CUDA Toolkit, TensorRT (10.13 on x86_64 — the exact version matters), and the
-Unitree SDK2 C++ headers. Note the TensorRT archive is roughly 10 GB, so check
-free space first.
+Everything in [Installation (Deployment)](installation_deploy.md) applies, but
+most of it is lighter than that page implies:
+
+- **Unitree SDK2 C++ is vendored in-tree** at `gear_sonic_deploy/thirdparty/unitree_sdk2/`
+  with a prebuilt static library. Nothing to install.
+- **ROS2 is optional** — the build is gated on `HAS_ROS2` and skips those
+  handlers when it is absent.
+- **onnxruntime C++** is expected at `/opt/onnxruntime` (`install_deps.sh` puts
+  it there).
+- **TensorRT does not need the ~10 GB TAR, an NVIDIA login, or sudo.** The
+  `.deb` files on NVIDIA's CUDA apt repo are served unauthenticated and can be
+  unpacked into a user prefix. Only five packages are needed, and only
+  `NvInfer.h` gates the CMake configure while just `libnvinfer.so` and
+  `libnvonnxparser.so` are ever linked.
 
 ```bash
-df -h .
+B=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64
+V=10.13.3.9-1+cuda12.9
+PREFIX=$HOME/opt/tensorrt-10.13.3.9
+WORK=$(mktemp -d) && cd "$WORK"
+for p in libnvinfer-headers-dev libnvinfer10 libnvonnxparsers10 \
+         libnvonnxparsers-dev libnvinfer-plugin10; do
+  curl -fL --retry 3 -O "$B/${p}_${V}_amd64.deb"
+done
+mkdir -p "$PREFIX/stage"
+for d in *.deb; do dpkg-deb -x "$d" "$PREFIX/stage"; done
+mkdir -p "$PREFIX/include" "$PREFIX/lib"
+mv "$PREFIX/stage/usr/include/x86_64-linux-gnu/"* "$PREFIX/include/"
+mv "$PREFIX/stage/usr/lib/x86_64-linux-gnu/"*     "$PREFIX/lib/"
+rm -rf "$PREFIX/stage" "$WORK"
+cd "$PREFIX/lib" && for so in libnvinfer libnvinfer_plugin libnvonnxparser; do
+  f=$(ls ${so}.so.*.*.* 2>/dev/null | head -1)
+  [ -n "$f" ] && ln -sf "$f" "${so}.so.10" && ln -sf "${so}.so.10" "${so}.so"
+done
+rm -f "$PREFIX/lib/"*_static.a "$PREFIX/lib/libonnx_proto.a"
+```
+
+That costs about 1.2 GB downloaded and 2.7 GB installed. For comparison,
+`apt install tensorrt-dev` costs roughly 15 GB peak, of which `libnvinfer-dev`
+is ~5 GB whose only contribution to a shared-library build is a single symlink,
+plus a ~1.7 GB Windows cross-build blob. The pip wheels are not an option at
+all: they ship no headers.
+
+```{warning}
+Pin the version. The repo now carries TensorRT 11.x, so an unpinned
+`apt-get install libnvinfer-dev` resolves to the wrong major version *and* CUDA
+13. Use `+cuda12.9` builds with CUDA 12.x — there is no `+cuda12.8` build, and
+minor-version compatibility covers the difference.
+```
+
+Then set the root — `setup_env.sh` scrapes `~/.bashrc` for exactly this line,
+and `deploy.sh` and the Docker mount both key off it:
+
+```bash
+echo 'export TensorRT_ROOT=$HOME/opt/tensorrt-10.13.3.9' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH="$TensorRT_ROOT/lib:$LD_LIBRARY_PATH"' >> ~/.bashrc
+```
+
+Build with the project's own entry point, from `gear_sonic_deploy/`:
+
+```bash
+just build
+```
+
+```{note}
+The engine cache hashes the ONNX bytes, GPU name and precision, but **not** the
+TensorRT version. After changing TensorRT version, delete cached `.trt` files or
+a stale engine will be loaded and fail to deserialize rather than being rebuilt.
 ```
 
 ### Port status
@@ -258,7 +319,7 @@ df -h .
 |---|---|
 | `policy/sonic_h2/observation_config.yaml` | **done** — encoder 1791 / decoder 1054 |
 | `include/policy_parameters_h2.hpp` | **done** — gains, action scale, defaults, index maps |
-| `include/robot_parameters.hpp` | todo — `G1_NUM_MOTOR` 29→31, joint enum, DDS topics |
+| `include/robot_parameters_h2.hpp` | **done** — 31 motors, joint enum, DDS topics |
 | `src/g1_deploy_onnx_ref.cpp` | todo — observation registry dims (290→310) |
 | `include/localmotion_kplanner.hpp` | todo |
 | `include/control_policy.hpp`, `error_monitor.hpp` | todo |
@@ -267,7 +328,9 @@ df -h .
 
 `G1_NUM_MOTOR` is a compile-time array size (`std::array<float, 29>`), not a
 config value, so pointing the existing binary at an H2 ONNX does not work: it
-assembles a 1751-dim encoder input for a model that expects 1791.
+assembles a 1751-dim encoder input for a model that expects 1791. The G1 binary
+itself builds and links fine once `TensorRT_ROOT` is set — the toolchain is not
+the blocker, the port is.
 
 The numbers in `policy_parameters_h2.hpp` are checked against
 `gear_sonic/envs/manager_env/robots/h2.py` — all 31 joints of `action_scale`,
