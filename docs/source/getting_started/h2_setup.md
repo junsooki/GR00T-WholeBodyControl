@@ -132,6 +132,7 @@ With the XRoboToolkit PC service running and the headset connected:
     --reference teleop --onnx h2_policy/onnx/model_step_100000_teleop.onnx --pico --viewer
 ```
 
+Press **A** on the right controller to engage: it zeroes and starts commanding.
 Stand in the robot's stance — arms relaxed, facing forward — and press **A** on
 the right controller to zero. Targets are deltas from that zero, so where you
 stand in the play space does not matter, and nothing is commanded until you
@@ -145,6 +146,25 @@ The SDK reports poses as `[x, y, z, qx, qy, qz, qw]` — the quaternion is
 forward against the robot's Z-up, +X forward, so positions and orientations are
 both changed of basis. `PicoSource.XR_TO_ROBOT` does this and is unit-tested
 against the three axes.
+```
+
+#### Seeing what the robot sees
+
+`--camera head` views from a camera on the robot's head instead of the free
+orbit camera, and works with both `--viewer` and `--video`:
+
+```bash
+.venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \\
+    --reference teleop --onnx h2_policy/onnx/model_step_100000_teleop.onnx \\
+    --pico --camera head --viewer
+```
+
+```{note}
+This renders the robot's point of view **to the desktop window**. It is not
+streamed back into the headset — there is no video path to the PICO here. The
+shipped stack does that through the deployment pipeline (`run_sim_loop.py`
+`--enable-image-publish`, `sensor_server.py`, and the ZMQ camera topic), which is
+part of the C++ deployment port and not wired up for H2 yet.
 ```
 
 ```{warning}

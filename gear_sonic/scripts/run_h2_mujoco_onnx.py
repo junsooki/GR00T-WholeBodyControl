@@ -277,6 +277,13 @@ def build_scene(mujoco, add_armature=True):
     ET.SubElement(world, "geom", name="_floor", type="plane", size="0 0 0.05",
                   material="_grid", condim="3")
 
+    # h2.xml carries no cameras at all, so add a head-mounted one. MuJoCo cameras
+    # look down their own -Z with +Y up, so to point it along the robot's +X
+    # (forward) with +Z up the frame is rotated -90 deg about X then -90 about Z.
+    head = next(b for b in root.iter("body") if b.get("name") == "head_yaw_link")
+    ET.SubElement(head, "camera", name="head", pos="0.10 0 0.10",
+                  xyaxes="0 -1 0  0 0 1", fovy="70")
+
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
     spec = H2Spec(model, mujoco)
     if add_armature:
@@ -799,9 +806,18 @@ def run(args):
             # segfaults on exit.
             viewer_ctx = stack.enter_context(mujoco.viewer.launch_passive(model, data))
 
+        cam_id = -1
+        if args.camera == "head":
+            cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "head")
+            if viewer_ctx is not None:
+                viewer_ctx.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+                viewer_ctx.cam.fixedcamid = cam_id
+
         wall_start = time.perf_counter()
         step = -1
+        interrupted = False
         while n_control is None or step + 1 < n_control:
+          try:
             step += 1
             t = step * control_dt
             if pico is not None:
@@ -835,7 +851,7 @@ def run(args):
                 fell_at = t
 
             if renderer is not None and step % args.render_every == 0:
-                renderer.update_scene(data, camera=-1)
+                renderer.update_scene(data, camera=cam_id)
                 frames.append(renderer.render())
             if viewer_ctx is not None:
                 if not viewer_ctx.is_running():
@@ -846,7 +862,17 @@ def run(args):
                 behind = (t + control_dt) - (time.perf_counter() - wall_start)
                 if behind > 0:
                     time.sleep(behind)
+          except KeyboardInterrupt:
+            # Ctrl+C is the normal way to end an unbounded viewer run, so report
+            # the run rather than dumping a traceback from inside time.sleep.
+            interrupted = True
+            break
 
+    if interrupted:
+        print("\n(interrupted)")
+    if not heights:
+        print("no steps completed")
+        return 1
     heights = np.asarray(heights)
     print()
     print(f"steps      {len(heights)} control steps ({len(heights) * SIM_DT * DECIMATION:.1f} s)")
@@ -886,6 +912,9 @@ def main(argv=None):
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer")
+    p.add_argument("--camera", choices=["free", "head"], default="free",
+                   help="'head' views from a camera on the robot's head (its own POV) "
+                        "instead of the free orbit camera")
     p.add_argument("--video", help="write an mp4 here")
     p.add_argument("--render-width", type=int, default=640)
     p.add_argument("--render-height", type=int, default=480)
