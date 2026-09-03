@@ -162,6 +162,24 @@ def quat_to_mat(q):
     ])
 
 
+def mat_to_quat(m):
+    """Rotation matrix -> wxyz quaternion (Shepperd's method, branch on trace)."""
+    tr = m[0, 0] + m[1, 1] + m[2, 2]
+    if tr > 0:
+        s_ = math.sqrt(tr + 1.0) * 2
+        return np.array([0.25 * s_, (m[2, 1] - m[1, 2]) / s_,
+                         (m[0, 2] - m[2, 0]) / s_, (m[1, 0] - m[0, 1]) / s_])
+    i = int(np.argmax([m[0, 0], m[1, 1], m[2, 2]]))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s_ = math.sqrt(m[i, i] - m[j, j] - m[k, k] + 1.0) * 2
+    q = np.empty(4)
+    q[0] = (m[k, j] - m[j, k]) / s_
+    q[i + 1] = 0.25 * s_
+    q[j + 1] = (m[j, i] + m[i, j]) / s_
+    q[k + 1] = (m[k, i] + m[i, k]) / s_
+    return q / np.linalg.norm(q)
+
+
 def heading_quat(q):
     """Yaw-only quaternion, matching torch_transform.get_heading_q."""
     out = np.array([q[0], 0.0, 0.0, q[3]])
@@ -660,6 +678,104 @@ class PicoSource:
             self.xrt.close()
 
 
+class SmplSource(PicoSource):
+    """Whole-body targets from full-body tracking, for the ``smpl`` head.
+
+    The teleop head is 3-point: head and two wrists drive the arms while the
+    legs track a frozen standing reference, so the operator's legs do nothing.
+    The smpl head instead takes the whole 24-joint SMPL skeleton -- hips, knees,
+    ankles included -- so the operator's legs drive the robot's legs.
+
+    That skeleton is exactly what XRoboToolkit's body tracking reports:
+    ``get_body_joints_pose()`` returns 24 joints in SMPL order (pelvis, hips,
+    spine, knees, ankles, feet, neck, collars, head, shoulders, elbows, wrists,
+    hands), which is why the repo's own PICO server reads body data rather than
+    controller poses. It requires PICO Motion Trackers -- controllers alone
+    cannot report legs.
+
+    Reference block for this head, in tokenizer order, 840 dims:
+
+        smpl_joints_multi_future_local_nonflat   720   10 frames x 24 joints x 3
+        smpl_root_ori_heading_multi_future        60   10 frames x 6D rotation
+        joint_pos_multi_future_wrist_for_smpl     60   10 frames x 6 wrist DOF
+
+    Joints are root-relative (SMPL stores root translation separately) and then
+    rotated into each frame's own root orientation. Live tracking has no future,
+    so the current frame is held across all ten -- the same freeze-frame the
+    static reference relies on.
+    """
+
+    name = "smpl"
+    SIZE = 720 + 60 + 60
+    NUM_SMPL_JOINTS = 24
+
+    # A neutral standing skeleton, root-relative, in the robot frame. Used when
+    # body tracking has not started yet. The obvious fallback -- zeros -- is a
+    # skeleton with every joint collapsed onto the pelvis, which is not a pose
+    # at all: the policy reads it as a body folded into a point and topples in
+    # about a third of a second. "Stand" is the only safe thing to say when the
+    # tracker has told you nothing.
+    NEUTRAL_SKELETON = np.array([
+        [0.0, 0.00, 0.00], [0.0, 0.09, -0.08], [0.0, -0.09, -0.08], [0.0, 0.00, 0.12],
+        [0.0, 0.09, -0.48], [0.0, -0.09, -0.48], [0.0, 0.00, 0.25], [0.0, 0.09, -0.88],
+        [0.0, -0.09, -0.88], [0.0, 0.00, 0.32], [0.12, 0.09, -0.94], [0.12, -0.09, -0.94],
+        [0.0, 0.00, 0.50], [0.0, 0.08, 0.44], [0.0, -0.08, 0.44], [0.0, 0.00, 0.60],
+        [0.0, 0.17, 0.45], [0.0, -0.17, 0.45], [0.0, 0.43, 0.45], [0.0, -0.43, 0.45],
+        [0.0, 0.68, 0.45], [0.0, -0.68, 0.45], [0.0, 0.78, 0.45], [0.0, -0.78, 0.45],
+    ])
+
+    def __init__(self, spec, position_gain=1.0, track_head=True):
+        super().__init__(position_gain=position_gain, track_head=track_head)
+        self.spec = spec
+        self.duration = float("inf")
+        self._last_block = None
+
+    def _body(self):
+        """24 SMPL joints as (positions, root quaternion) in the robot frame."""
+        if not self.xrt.is_body_data_available():
+            return None
+        raw = np.asarray(self.xrt.get_body_joints_pose(), dtype=np.float64)
+        if raw.shape != (self.NUM_SMPL_JOINTS, 7):
+            return None
+        pos = raw[:, :3] @ self.XR_TO_ROBOT.T
+        root_wxyz = np.array([raw[0, 6], raw[0, 3], raw[0, 4], raw[0, 5]])
+        root_rot = self.XR_TO_ROBOT @ quat_to_mat(root_wxyz) @ self.XR_TO_ROBOT.T
+        return pos - pos[0], root_rot          # root-relative, robot frame
+
+    def reference_block(self, t, anchor_heading_quat):
+        body = self._body()
+        if body is None:
+            # No body data: hold the last good command rather than snapping the
+            # whole skeleton, which would be a far worse discontinuity than the
+            # 3-point case since it moves the legs too.
+            if self._last_block is not None:
+                return self._last_block
+            joints = self.NEUTRAL_SKELETON.copy()
+            root_rot = np.eye(3)
+        else:
+            joints, root_rot = body
+
+        # Rotate joints into the root's own orientation frame.
+        local = joints @ root_rot
+        joints_block = np.tile(local.reshape(-1), NUM_FUTURE_FRAMES)
+
+        # Root orientation, normalised by the robot's heading, as 6D.
+        root_wxyz = mat_to_quat(root_rot)
+        rel = quat_mul(quat_inv(anchor_heading_quat), root_wxyz)
+        ori_block = np.tile(rot6d(rel), NUM_FUTURE_FRAMES)
+
+        # Wrist DOF targets. Body tracking gives no robot joint angles, so hold
+        # the default; the head reads these as the reference wrist pose.
+        wrist = self.spec.default_il[
+            [self.spec.mj_to_il[i] for i in (21, 22, 23, 28, 29, 30)]
+        ]
+        wrist_block = np.tile(wrist, NUM_FUTURE_FRAMES)
+
+        block = np.concatenate([joints_block, ori_block, wrist_block])
+        self._last_block = block
+        return block
+
+
 # --------------------------------------------------------------------------
 # Observation assembly
 # --------------------------------------------------------------------------
@@ -773,6 +889,10 @@ def run(args):
     pico = None
     if args.reference == "static":
         reference = StaticReference(spec)
+    elif args.reference == "smpl":
+        pico = SmplSource(spec, position_gain=args.pico_gain,
+                          track_head=not args.pico_no_head)
+        reference = pico
     elif args.reference == "teleop":
         target_fn = None
         if args.pico:
@@ -798,14 +918,16 @@ def run(args):
     action = np.zeros(NUM_DOF)
     obs.reset(data, action)
 
-    ref_size = TeleopReference.SIZE if args.reference == "teleop" else 680
+    ref_size = {"teleop": TeleopReference.SIZE, "smpl": SmplSource.SIZE}.get(
+        args.reference, 680)
     proprio = obs.proprioception()
     if proprio.size + ref_size != expected:
         raise SystemExit(
             f"observation size mismatch: built {proprio.size + ref_size}, "
             f"{os.path.basename(args.onnx)} expects {expected}.\n"
             f"  --reference {args.reference} needs the "
-            f"{'teleop' if args.reference == 'teleop' else 'g1'} head; pass the matching --onnx."
+            f"{ {'teleop': 'teleop', 'smpl': 'smpl'}.get(args.reference, 'g1') } "
+            f"head; pass the matching --onnx."
         )
     print(f"model      {os.path.basename(args.onnx)}  input {expected}  "
           f"(reference {ref_size} + proprioception {proprio.size})")
@@ -871,7 +993,7 @@ def run(args):
             if pico is not None:
                 pico.poll()
             heading = heading_quat(data.qpos[3:7])
-            if args.reference == "teleop":
+            if args.reference in ("teleop", "smpl"):
                 ref_block = reference.reference_block(t, heading)
             else:
                 ref_jp, ref_jv, ref_quat = reference.sample(t, heading)
@@ -954,7 +1076,11 @@ def main(argv=None):
     p.add_argument("--onnx", default=os.path.join(REPO_ROOT, "h2_policy", "onnx",
                                                   "model_step_100000_g1.onnx"),
                    help="fused per-mode ONNX head; the g1 head is the motion-tracking one")
-    p.add_argument("--reference", choices=["static", "motion", "teleop"], default="static")
+    p.add_argument("--reference", choices=["static", "motion", "teleop", "smpl"],
+                   default="static",
+                   help="'smpl' is whole-body: the operator's legs drive the robot's "
+                        "legs, and it needs PICO Motion Trackers. 'teleop' is 3-point, "
+                        "arms only.")
     p.add_argument("--pico", action="store_true",
                    help="teleop only: drive the hand and head targets from a PICO headset via "
                         "XRoboToolkit (the PC service must be running)")
