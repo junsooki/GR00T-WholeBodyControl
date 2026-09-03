@@ -485,6 +485,37 @@ def wave_targets(t):
     }
 
 
+class ElasticBand:
+    """Suspends the robot from a point above it, as unitree_mujoco does.
+
+    A PD on the pelvis pose, applied as an external wrench. It is what makes a
+    whole-body policy testable before it can reliably stand: the operator can
+    drive the legs without a fall ending the session every few seconds, and the
+    band can then be released to see whether the policy holds on its own.
+
+    Mirrors gear_sonic/utils/mujoco_sim/unitree_sdk2py_bridge.py's ElasticBand,
+    reimplemented here rather than imported because that module pulls in
+    unitree_sdk2py, which this runner deliberately does not depend on.
+    """
+
+    def __init__(self, height=1.04, stiffness=10000.0, damping=1000.0,
+                 ang_stiffness=1000.0, ang_damping=10.0):
+        self.point = np.array([0.0, 0.0, height])
+        self.kp_pos, self.kd_pos = stiffness, damping
+        self.kp_ang, self.kd_ang = ang_stiffness, ang_damping
+        self.enabled = True
+
+    def wrench(self, pos, quat, lin_vel, ang_vel):
+        force = self.kp_pos * (self.point - pos) - self.kd_pos * lin_vel
+        # Rotation vector of the pelvis attitude: torque pulls it back upright.
+        w = np.clip(quat[0], -1.0, 1.0)
+        angle = 2.0 * math.acos(w)
+        axis = quat[1:] / (math.sqrt(max(1.0 - w * w, 1e-12)))
+        rotvec = axis * angle if angle > 1e-6 else np.zeros(3)
+        torque = -self.kp_ang * rotvec - self.kd_ang * ang_vel
+        return np.concatenate([force, torque])
+
+
 # --------------------------------------------------------------------------
 # Live teleoperation from a PICO headset
 # --------------------------------------------------------------------------
@@ -932,6 +963,9 @@ def run(args):
     print(f"model      {os.path.basename(args.onnx)}  input {expected}  "
           f"(reference {ref_size} + proprioception {proprio.size})")
     print(f"reference  {reference.name}" + (f"  '{reference.key}'" if args.reference == "motion" else ""))
+    if args.band:
+        rel = f", released at {args.band_release:.1f}s" if args.band_release else ""
+        print(f"band       suspended at {args.height:.2f} m{rel}")
     print("head       " + ("following the headset" if (pico and not args.pico_no_head)
                             else "commanded level and forward"))
     if pico is not None:
@@ -959,6 +993,8 @@ def run(args):
     frames = []
     heights, fell_at = [], None
     viewer_used = bool(args.viewer)
+    band = ElasticBand(height=args.height) if args.band else None
+    pelvis_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
 
     with contextlib.ExitStack() as stack:
         renderer = None
@@ -1010,6 +1046,16 @@ def run(args):
             # and carries no load -- so the target is always commanded directly.
             # head_target is where a headset orientation goes in a teleop loop.
             target_mj[spec.head_mj] = pico.head(t) if pico is not None else head_target(t)
+            if band is not None:
+                if args.band_release and t >= args.band_release:
+                    if band.enabled:
+                        print(f"  [band] released at {t:.1f}s -- standing unaided from here")
+                        band.enabled = False
+                        data.xfrc_applied[pelvis_id] = 0.0
+                elif band.enabled:
+                    data.xfrc_applied[pelvis_id] = band.wrench(
+                        data.qpos[:3], data.qpos[3:7], data.qvel[:3], data.qvel[3:6])
+
             for _ in range(DECIMATION):
                 torque = spec.kp * (target_mj - data.qpos[7:]) - spec.kd * data.qvel[6:]
                 data.ctrl[:] = np.clip(torque, -spec.effort_limit, spec.effort_limit)
@@ -1097,6 +1143,12 @@ def main(argv=None):
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
+    p.add_argument("--band", action="store_true",
+                   help="suspend the robot from an elastic band, so a fall does not end "
+                        "the session while tuning whole-body control")
+    p.add_argument("--band-release", type=float, default=0.0,
+                   help="with --band, release it after this many seconds to see whether "
+                        "the policy holds unaided")
     p.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer")
     p.add_argument("--camera", choices=["free", "head"], default="free",
                    help="'head' views from a camera on the robot's head (its own POV) "
