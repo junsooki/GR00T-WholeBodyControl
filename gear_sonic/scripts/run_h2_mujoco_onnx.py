@@ -822,12 +822,23 @@ class SmplSource(PicoSource):
             return None
         sk = self.NEUTRAL_SKELETON.copy()
         gain = self.gain
+        # Rate limited exactly as the 3-point path is. Raw deltas were what
+        # toppled that one: a tracker glitch or the first frame after zeroing
+        # steps the target by an arbitrary distance in a single control tick.
+        step = self.MAX_TARGET_SPEED * (SIM_DT * DECIMATION)
         for key, wrist, hand, elbow, shoulder in (
             ("left", self.J_L_WRIST, self.J_L_HAND, self.J_L_ELBOW, self.J_L_SHOULDER),
             ("right", self.J_R_WRIST, self.J_R_HAND, self.J_R_ELBOW, self.J_R_SHOULDER),
         ):
             delta = np.clip((current[key][0] - self.zero[key][0]) * gain,
                             -self.max_offset, self.max_offset)
+            prev = self._last.get(key)
+            if prev is not None:
+                move = delta - prev
+                dist = float(np.linalg.norm(move))
+                if dist > step:
+                    delta = prev + move * (step / dist)
+            self._last[key] = delta
             sk[wrist] = sk[wrist] + delta
             sk[hand] = sk[hand] + delta
             # Elbow is not tracked, so place it midway between shoulder and
@@ -836,6 +847,13 @@ class SmplSource(PicoSource):
             sk[elbow] = 0.5 * (sk[shoulder] + sk[wrist])
         head_delta = np.clip((current["head"][0] - self.zero["head"][0]) * gain,
                              -self.max_offset, self.max_offset)
+        prev_h = self._last.get("head")
+        if prev_h is not None:
+            move = head_delta - prev_h
+            dist = float(np.linalg.norm(move))
+            if dist > step:
+                head_delta = prev_h + move * (step / dist)
+        self._last["head"] = head_delta
         sk[self.J_HEAD] = sk[self.J_HEAD] + head_delta
         return sk, current["head"][1]
 
