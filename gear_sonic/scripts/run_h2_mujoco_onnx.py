@@ -821,19 +821,34 @@ class SmplSource(PicoSource):
     # shoulder and wrist, which tucks the upper arm without splaying the
     # forearm; it stops improving below Y=0.03, since H2's upper arm cannot fold
     # further.
+    #
+    # The legs sit forward by 0.10 for the same reason the arms do, but in
+    # answer to them. Arms out in front carry the centre of mass forward, and
+    # the robot then holds a permanent lean to keep it over the feet -- visible
+    # as the pelvis pushed out ahead and a constant pelvis oscillation. Moving
+    # the reference legs forward brings the feet back under the mass:
+    #
+    #     leg X   CoM over feet   pelvis wobble   shoulder pitch
+    #      0.00       6.9 cm         13.7 mm          2.0 deg
+    #      0.05       4.8 cm          4.9 mm          0.3 deg
+    #      0.10       6.7 cm          0.6 mm          0.4 deg   (this)
+    #      0.20       4.2 cm          3.3 mm          0.3 deg
+    #
+    # The wobble falls twentyfold and the arm pose improves with it, so the
+    # forward arms stop costing balance headroom.
     NEUTRAL_SKELETON = np.array([
         [0.00, 0.00, 0.00],   # 0  pelvis
         [0.00, 0.09, -0.08],  # 1  L hip
         [0.00, -0.09, -0.08], # 2  R hip
         [0.00, 0.00, 0.12],   # 3  spine1
-        [0.00, 0.09, -0.48],  # 4  L knee
-        [0.00, -0.09, -0.48], # 5  R knee
+        [0.10, 0.09, -0.48],  # 4  L knee
+        [0.10, -0.09, -0.48], # 5  R knee
         [0.00, 0.00, 0.25],   # 6  spine2
-        [0.00, 0.09, -0.88],  # 7  L ankle
-        [0.00, -0.09, -0.88], # 8  R ankle
+        [0.10, 0.09, -0.88],  # 7  L ankle
+        [0.10, -0.09, -0.88], # 8  R ankle
         [0.00, 0.00, 0.32],   # 9  spine3
-        [0.12, 0.09, -0.94],  # 10 L foot
-        [0.12, -0.09, -0.94], # 11 R foot
+        [0.22, 0.09, -0.94],  # 10 L foot
+        [0.22, -0.09, -0.94], # 11 R foot
         [0.00, 0.00, 0.50],   # 12 neck
         [0.00, 0.08, 0.44],   # 13 L collar
         [0.00, -0.08, 0.44],  # 14 R collar
@@ -850,15 +865,21 @@ class SmplSource(PicoSource):
 
     # Arm joints the forward offset moves: collars, shoulders, elbows, wrists, hands.
     ARM_JOINTS = (13, 14, 16, 17, 18, 19, 20, 21, 22, 23)
+    # How far in front of the body the reference arms sit. Measured against
+    # shoulder pitch deviation from H2's rest pose: 0.00 gives 35 deg, 0.18
+    # gives 17, 0.26 gives 4, 0.34 gives 6. It costs balance headroom -- the
+    # centre of mass moves forward and the policy holds a lean -- so the pelvis
+    # wobble grows with it.
+    ARM_FORWARD = 0.26
 
-    def __init__(self, spec, position_gain=1.0, track_head=True, arm_forward=0.26):
+    def __init__(self, spec, position_gain=1.0, track_head=True):
         super().__init__(position_gain=position_gain, track_head=track_head)
         self.spec = spec
-        # The base skeleton holds the arms in the body plane; how far forward
-        # they sit is the one knob worth exposing, because it trades arm pose
-        # against balance headroom rather than simply being better or worse.
+        # The base skeleton holds the arms in the body plane; ARM_FORWARD moves
+        # them out in front, which is what makes the robot's shoulders sit near
+        # rest instead of swung back.
         self.skeleton = self.NEUTRAL_SKELETON.copy()
-        self.skeleton[list(self.ARM_JOINTS), 0] += arm_forward
+        self.skeleton[list(self.ARM_JOINTS), 0] += self.ARM_FORWARD
         self.duration = float("inf")
         self._last_block = None
 
@@ -1201,16 +1222,14 @@ def run(args):
         pico = PicoSource(position_gain=args.pico_gain, track_head=not args.pico_no_head)
         hybrid = HybridSource(spec, model, mujoco, pico,
                               SmplSource(spec, position_gain=args.pico_gain,
-                                         track_head=not args.pico_no_head,
-                                         arm_forward=args.arm_forward))
+                                         track_head=not args.pico_no_head))
         hybrid.smpl.xrt = pico.xrt          # one SDK connection, shared
         reference = hybrid
     elif args.reference == "static":
         reference = StaticReference(spec)
     elif args.reference == "smpl":
         pico = SmplSource(spec, position_gain=args.pico_gain,
-                          track_head=not args.pico_no_head,
-                          arm_forward=args.arm_forward)
+                          track_head=not args.pico_no_head)
         reference = pico
     elif args.reference == "teleop":
         target_fn = None
@@ -1441,11 +1460,6 @@ def main(argv=None):
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
-    p.add_argument("--arm-forward", type=float, default=0.26,
-                   help="how far forward the reference arms sit, in metres. Trades arm "
-                        "pose against balance headroom: 0.26 gives the best-looking arms "
-                        "(4 deg from rest) but 6 mm of pelvis wobble, 0.18 gives 17 deg "
-                        "and 0.7 mm. Prefer 0.18 for anything dynamic.")
     p.add_argument("--elbow", type=float,
                    help="override the elbow rest angle in radians (default 0.60). "
                         "HIGHER is straighter, not lower: the arm's included angle "
