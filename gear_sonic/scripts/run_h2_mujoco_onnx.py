@@ -664,13 +664,20 @@ class PicoSource:
         # A, or either trigger. The app has a "Switch w/ A Button" option that
         # intercepts A to toggle transmission, in which case the press never
         # reaches here -- so engaging must not depend on that one button.
-        sources = []
-        if bool(self.xrt.get_A_button()):
-            sources.append("A")
-        if self.xrt.get_right_trigger() > 0.5:
-            sources.append("right trigger")
-        if self.xrt.get_left_trigger() > 0.5:
-            sources.append("left trigger")
+        # Any control engages. Which buttons actually reach the SDK depends on
+        # the headset app's configuration -- "Switch w/ A Button" eats A, for
+        # one -- so binding to a single button means an operator can be left
+        # with no way in at all. Accepting everything removes that failure mode.
+        sources = [name for name, pressed_now in (
+            ("A", bool(self.xrt.get_A_button())),
+            ("B", bool(self.xrt.get_B_button())),
+            ("X", bool(self.xrt.get_X_button())),
+            ("Y", bool(self.xrt.get_Y_button())),
+            ("right trigger", self.xrt.get_right_trigger() > 0.5),
+            ("left trigger", self.xrt.get_left_trigger() > 0.5),
+            ("right grip", self.xrt.get_right_grip() > 0.5),
+            ("left grip", self.xrt.get_left_grip() > 0.5),
+        ) if pressed_now]
         pressed = bool(sources)
         if pressed and not self._prev_a and self.set_zero():
             # Name the input, so an engage nobody asked for is traceable to
@@ -1173,8 +1180,8 @@ def run(args):
         print("mode       starting on 3-point; press B to promote to whole body")
     if pico is not None:
         print()
-        print("  Stand in the robot's stance -- arms relaxed, facing forward -- and press A")
-        print("  or squeeze either trigger to zero. Do it again at any time to re-zero.")
+        print("  Stand in the robot's stance -- arms relaxed, facing forward -- then press")
+        print("  any button or trigger to engage. Press again at any time to re-zero.")
         print("  Nothing is commanded until you do.")
         print()
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
