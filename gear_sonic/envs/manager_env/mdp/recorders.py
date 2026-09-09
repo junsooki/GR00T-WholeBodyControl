@@ -333,6 +333,13 @@ class TrajectoryRecorderTerm(recorder_manager.RecorderTerm):
                 "fps": effective_fps,
                 "num_joints": data["dof_pos"][0].shape[0],
                 "total_frames": len(data["dof_pos"]),
+                # dof_pos is in Isaac Lab's articulation order, which is neither
+                # the MJCF order nor anything derivable from the kinematic tree.
+                # Without the names, replaying this file in MuJoCo needs a
+                # hand-found permutation per robot, and a wrong one renders an
+                # anatomically impossible robot with no error raised. Save them.
+                "joint_names": list(self.env.scene["robot"].data.joint_names),
+                "joint_order": "isaaclab",
             }
 
             if data.get("object_pos_w"):
