@@ -803,12 +803,17 @@ class SmplSource(PicoSource):
     # arms held out. Sweeping how far the arms hang out and forward and measuring
     # the resulting shoulder deviation from H2's rest pose:
     #
-    #     out 0.20  fwd 0.16  ->  13.3 deg   (this)
-    #     out 0.26  fwd 0.08  ->  18.6 deg
-    #     out 0.20  fwd 0.00  ->  17.7 deg
-    #     out 0.38  fwd 0.00  ->  34.1 deg
+    #     out      all shoulders   shoulder roll   wrist from centre
+    #     0.11         13.2 deg         6.9 deg         0.247 m   (this)
+    #     0.14         12.6 deg         7.2 deg         0.256 m
+    #     0.17         12.9 deg        10.1 deg         0.278 m
+    #     0.20         13.3 deg        11.4 deg         0.290 m
+    #     0.38         34.1 deg           --            --
     #
-    # so the arms sit slightly forward of the body rather than straight down.
+    # Shoulder roll is what holds the arm away from the body, so it is the term
+    # worth minimising even where the overall figure is flat: the arms tuck in
+    # rather than standing off. Slightly forward of the body beats straight down
+    # at every width tried.
     NEUTRAL_SKELETON = np.array([
         [0.00, 0.00, 0.00],   # 0  pelvis
         [0.00, 0.09, -0.08],  # 1  L hip
@@ -828,12 +833,12 @@ class SmplSource(PicoSource):
         [0.00, 0.00, 0.60],   # 15 head
         [0.00, 0.17, 0.45],   # 16 L shoulder
         [0.00, -0.17, 0.45],  # 17 R shoulder
-        [0.06, 0.17, 0.18],   # 18 L elbow
-        [0.06, -0.17, 0.18],  # 19 R elbow
-        [0.13, 0.20, -0.08],  # 20 L wrist
-        [0.13, -0.20, -0.08], # 21 R wrist
-        [0.14, 0.20, -0.16],  # 22 L hand
-        [0.14, -0.20, -0.16], # 23 R hand
+        [0.06, 0.09, 0.18],   # 18 L elbow
+        [0.06, -0.09, 0.18],  # 19 R elbow
+        [0.13, 0.11, -0.08],  # 20 L wrist
+        [0.13, -0.11, -0.08], # 21 R wrist
+        [0.14, 0.11, -0.16],  # 22 L hand
+        [0.14, -0.11, -0.16], # 23 R hand
     ])
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
