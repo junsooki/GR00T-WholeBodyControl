@@ -661,7 +661,12 @@ class PicoSource:
 
         The A button (re)zeroes, on the press edge rather than while held.
         """
-        pressed = bool(self.xrt.get_A_button())
+        # A, or either trigger. The app has a "Switch w/ A Button" option that
+        # intercepts A to toggle transmission, in which case the press never
+        # reaches here -- so engaging must not depend on that one button.
+        pressed = (bool(self.xrt.get_A_button())
+                   or self.xrt.get_right_trigger() > 0.5
+                   or self.xrt.get_left_trigger() > 0.5)
         if pressed and not self._prev_a and self.set_zero():
             print("  [pico] zeroed")
         self._prev_a = pressed
@@ -1154,7 +1159,7 @@ def run(args):
     if pico is not None:
         print()
         print("  Stand in the robot's stance -- arms relaxed, facing forward -- and press A")
-        print("  on the right controller to zero. Press A again at any time to re-zero.")
+        print("  or squeeze either trigger to zero. Do it again at any time to re-zero.")
         print("  Nothing is commanded until you do.")
         print()
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
