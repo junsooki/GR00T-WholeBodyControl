@@ -899,9 +899,14 @@ class SmplSource(PicoSource):
         # on its own, because it is copying a body nobody agreed to send yet.
         if self.zero is None:
             return None
-        if not self.xrt.is_body_data_available():
-            # No Motion Trackers: synthesise the skeleton from the 3 points we do
-            # have rather than refusing to run.
+        # Gate on trackers actually being paired, not on body data merely being
+        # offered. The PICO reports is_body_data_available() == True with zero
+        # Motion Trackers, solving a whole skeleton from three points -- so the
+        # legs it hands back are inferred, not measured. Copying inferred legs
+        # onto the robot is worse than not driving them at all: it walks the
+        # centre of mass around on guesswork and topples. With no trackers,
+        # synthesise instead and keep the legs in a known standing pose.
+        if self.xrt.num_motion_data_available() < 1 or not self.xrt.is_body_data_available():
             return self._body_from_3point()
         raw = np.asarray(self.xrt.get_body_joints_pose(), dtype=np.float64)
         if raw.shape != (self.NUM_SMPL_JOINTS, 7):
@@ -909,7 +914,20 @@ class SmplSource(PicoSource):
         pos = raw[:, :3] @ self.XR_TO_ROBOT.T
         root_wxyz = np.array([raw[0, 6], raw[0, 3], raw[0, 4], raw[0, 5]])
         root_rot = self.XR_TO_ROBOT @ quat_to_mat(root_wxyz) @ self.XR_TO_ROBOT.T
-        return pos - pos[0], root_rot          # root-relative, robot frame
+        joints = pos - pos[0]                  # root-relative, robot frame
+
+        # Rate limited like every other target. Tracking drops and recovers --
+        # the service logs "device missing" then "device found" -- and without a
+        # limit the whole skeleton snaps across in one control step.
+        step = self.MAX_TARGET_SPEED * (SIM_DT * DECIMATION)
+        prev = self._last.get("skeleton")
+        if prev is not None:
+            move = joints - prev
+            dist = np.linalg.norm(move, axis=1, keepdims=True)
+            scale = np.minimum(1.0, step / np.maximum(dist, 1e-9))
+            joints = prev + move * scale
+        self._last["skeleton"] = joints
+        return joints, root_rot
 
     def reference_block(self, t, anchor_heading_quat):
         body = self._body()
