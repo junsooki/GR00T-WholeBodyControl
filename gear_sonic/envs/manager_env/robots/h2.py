@@ -1,3 +1,5 @@
+import os as _os
+
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 import isaaclab.sim as sim_utils
@@ -12,6 +14,14 @@ ARMATURE_4010 = 0.00425
 NATURAL_FREQ = 10 * 2.0 * 3.1415926535  # 10Hz
 DAMPING_RATIO = 2.0
 
+# Sensitivity hook. H2's true rotor inertia is not published anywhere, so these
+# armature values are G1's. Setting H2_ARMATURE_SCALE perturbs the *simulated*
+# joint inertia while leaving stiffness, damping and action scale at the values
+# a policy was trained with -- i.e. it asks "the controller thinks the joint is
+# this heavy, but it is actually N times heavier; does the policy still track?"
+# Defaults to 1.0, so unset it and nothing changes.
+_ARMATURE_SCALE = float(_os.environ.get("H2_ARMATURE_SCALE", "1.0"))
+
 STIFFNESS_5020 = ARMATURE_5020 * NATURAL_FREQ**2
 STIFFNESS_7520_14 = ARMATURE_7520_14 * NATURAL_FREQ**2
 STIFFNESS_7520_22 = ARMATURE_7520_22 * NATURAL_FREQ**2
@@ -21,6 +31,12 @@ DAMPING_5020 = 2.0 * DAMPING_RATIO * ARMATURE_5020 * NATURAL_FREQ
 DAMPING_7520_14 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ
 DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
+
+# Only the inertia the simulator integrates is scaled; the gains above are not.
+SIM_ARMATURE_5020 = ARMATURE_5020 * _ARMATURE_SCALE
+SIM_ARMATURE_7520_14 = ARMATURE_7520_14 * _ARMATURE_SCALE
+SIM_ARMATURE_7520_22 = ARMATURE_7520_22 * _ARMATURE_SCALE
+SIM_ARMATURE_4010 = ARMATURE_4010 * _ARMATURE_SCALE
 
 
 H2_ISAACLAB_JOINTS = [
@@ -278,10 +294,10 @@ H2_CFG = ArticulationCfg(
                 ".*_knee_joint": DAMPING_7520_22,
             },
             armature={
-                ".*_hip_pitch_joint": ARMATURE_7520_22,
-                ".*_hip_roll_joint": ARMATURE_7520_22,
-                ".*_hip_yaw_joint": ARMATURE_7520_14,
-                ".*_knee_joint": ARMATURE_7520_22,
+                ".*_hip_pitch_joint": SIM_ARMATURE_7520_22,
+                ".*_hip_roll_joint": SIM_ARMATURE_7520_22,
+                ".*_hip_yaw_joint": SIM_ARMATURE_7520_14,
+                ".*_knee_joint": SIM_ARMATURE_7520_22,
             },
         ),
         "feet": ImplicitActuatorCfg(
@@ -298,7 +314,7 @@ H2_CFG = ArticulationCfg(
             joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
-            armature=2.0 * ARMATURE_5020,
+            armature=2.0 * SIM_ARMATURE_5020,
         ),
         "waist": ImplicitActuatorCfg(
             effort_limit_sim=180.0,
@@ -306,7 +322,7 @@ H2_CFG = ArticulationCfg(
             joint_names_expr=["waist_roll_joint", "waist_pitch_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
-            armature=2.0 * ARMATURE_5020,
+            armature=2.0 * SIM_ARMATURE_5020,
         ),
         "waist_yaw": ImplicitActuatorCfg(
             effort_limit_sim=120.0,
@@ -314,7 +330,7 @@ H2_CFG = ArticulationCfg(
             joint_names_expr=["waist_yaw_joint"],
             stiffness=STIFFNESS_7520_14,
             damping=DAMPING_7520_14,
-            armature=ARMATURE_7520_14,
+            armature=SIM_ARMATURE_7520_14,
         ),
         "head": ImplicitActuatorCfg(
             effort_limit_sim=50.0,
@@ -322,7 +338,7 @@ H2_CFG = ArticulationCfg(
             joint_names_expr=["head_pitch_joint", "head_yaw_joint"],
             stiffness=2.0 * STIFFNESS_5020,
             damping=2.0 * DAMPING_5020,
-            armature=2.0 * ARMATURE_5020,
+            armature=2.0 * SIM_ARMATURE_5020,
         ),
         "arms": ImplicitActuatorCfg(
             joint_names_expr=[
@@ -371,13 +387,13 @@ H2_CFG = ArticulationCfg(
                 ".*_wrist_yaw_joint": DAMPING_4010,
             },
             armature={
-                ".*_shoulder_pitch_joint": ARMATURE_5020,
-                ".*_shoulder_roll_joint": ARMATURE_5020,
-                ".*_shoulder_yaw_joint": ARMATURE_5020,
-                ".*_elbow_joint": ARMATURE_5020,
-                ".*_wrist_roll_joint": ARMATURE_5020,
-                ".*_wrist_pitch_joint": ARMATURE_4010,
-                ".*_wrist_yaw_joint": ARMATURE_4010,
+                ".*_shoulder_pitch_joint": SIM_ARMATURE_5020,
+                ".*_shoulder_roll_joint": SIM_ARMATURE_5020,
+                ".*_shoulder_yaw_joint": SIM_ARMATURE_5020,
+                ".*_elbow_joint": SIM_ARMATURE_5020,
+                ".*_wrist_roll_joint": SIM_ARMATURE_5020,
+                ".*_wrist_pitch_joint": SIM_ARMATURE_4010,
+                ".*_wrist_yaw_joint": SIM_ARMATURE_4010,
             },
         ),
     },

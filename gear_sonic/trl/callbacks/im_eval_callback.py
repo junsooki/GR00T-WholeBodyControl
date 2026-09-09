@@ -546,13 +546,23 @@ class ImEvalCallback(TrainerCallback):
 
                 # Define subsets
                 # 6 + 3 + 5 = 14
+                # The distal foot body is *_ankle_roll_link on G1 but
+                # *_ankle_pitch_link on H2, whose leg chain runs
+                # knee -> ankle_roll -> ankle_pitch. G1's name is absent from
+                # H2's tracked bodies and raises here, so pick whichever the
+                # robot actually has.
+                _feet = next(
+                    ([f"left{s}", f"right{s}"] for s in ("_ankle_roll_link", "_ankle_pitch_link")
+                     if f"left{s}" in body_names and f"right{s}" in body_names),
+                    ["left_ankle_roll_link", "right_ankle_roll_link"],
+                )
                 legs_subset_names = [
                     "left_hip_roll_link",
                     "left_knee_link",
-                    "left_ankle_roll_link",
+                    _feet[0],
                     "right_hip_roll_link",
                     "right_knee_link",
-                    "right_ankle_roll_link",
+                    _feet[1],
                 ]
                 # NOTE use torso_link instead of head for vr_3points_subset_names
                 vr_3points_subset_names = [
@@ -568,7 +578,7 @@ class ImEvalCallback(TrainerCallback):
                     "right_elbow_link",
                 ]
 
-                foot_subset_names = ["left_ankle_roll_link", "right_ankle_roll_link"]
+                foot_subset_names = list(_feet)
 
                 # Get indices for subsets
                 legs_indices = [body_names.index(name) for name in legs_subset_names]
