@@ -664,11 +664,18 @@ class PicoSource:
         # A, or either trigger. The app has a "Switch w/ A Button" option that
         # intercepts A to toggle transmission, in which case the press never
         # reaches here -- so engaging must not depend on that one button.
-        pressed = (bool(self.xrt.get_A_button())
-                   or self.xrt.get_right_trigger() > 0.5
-                   or self.xrt.get_left_trigger() > 0.5)
+        sources = []
+        if bool(self.xrt.get_A_button()):
+            sources.append("A")
+        if self.xrt.get_right_trigger() > 0.5:
+            sources.append("right trigger")
+        if self.xrt.get_left_trigger() > 0.5:
+            sources.append("left trigger")
+        pressed = bool(sources)
         if pressed and not self._prev_a and self.set_zero():
-            print("  [pico] zeroed")
+            # Name the input, so an engage nobody asked for is traceable to
+            # whichever control reported it rather than looking spontaneous.
+            print(f"  [pico] zeroed (engaged by {', '.join(sources)})")
         self._prev_a = pressed
         return self.zero is not None
 
