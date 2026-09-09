@@ -110,6 +110,31 @@ SMPL_DT_FUTURE = 0.02     # commands.motion.smpl_dt_future_ref_frames
 SMPL_VEL_SMOOTH = 0.7     # weight on the previous velocity estimate
 SMPL_MIN_DT = 0.002       # s; below this the difference is dominated by noise
 SMPL_MAX_DT = 0.200       # s; above this the operator has moved unobserved
+# SMPL kinematic parents, used to restore bone lengths after extrapolating.
+# Parents precede children, so one forward pass corrects the whole tree.
+SMPL_PARENTS = (-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9,
+                12, 13, 14, 16, 17, 18, 19, 20, 21)
+SMPL_BONES = tuple((j, p) for j, p in enumerate(SMPL_PARENTS) if p >= 0)
+
+
+def project_onto_skeleton(pred, ref):
+    """Keep pred's bone DIRECTIONS, restore ref's bone LENGTHS.
+
+    Extrapolating 24 joints independently stretches the body: at a 180 ms
+    horizon a walking clip distorts bone lengths 5.2% on average and 130% at
+    worst (foot to ankle). Walking the tree from the pelvis and rescaling each
+    bone to its measured length takes that to 0.0000% while leaving the
+    extrapolated direction of every limb intact.
+    """
+    out = pred.copy()
+    for j, par in SMPL_BONES:
+        v = pred[j] - pred[par]
+        n = float(np.linalg.norm(v))
+        if n < 1e-9:
+            out[j] = out[par]
+            continue
+        out[j] = out[par] + v / n * float(np.linalg.norm(ref[j] - ref[par]))
+    return out
 ACTION_CLIP = 20.0        # env_config.action_clip_value
 NUM_DOF = 31
 INIT_HEIGHT = 1.04        # H2_CFG.init_state.pos[2]
@@ -1106,7 +1131,9 @@ class SmplSource(PicoSource):
         # ANGLES and re-run forward kinematics, or re-project the extrapolated
         # points back onto the measured bone lengths. Position-space
         # extrapolation cannot work, and the 130% number is why.
-        now = time.perf_counter()
+        # Fixed control dt, not wall clock: a load-dependent dt makes the velocity
+        # estimate, and therefore the whole extrapolation, non-reproducible.
+        now = getattr(self, "_step", 0) * SIM_DT * DECIMATION
         if self._prev_local is not None and self._prev_t is not None:
             dt = now - self._prev_t
             if SMPL_MIN_DT <= dt <= SMPL_MAX_DT:
@@ -1124,6 +1151,10 @@ class SmplSource(PicoSource):
         step = SMPL_DT_FUTURE if getattr(self, "extrapolate", False) else 0.0
         horizon = np.arange(NUM_FUTURE_FRAMES)[:, None, None] * step
         future = local[None, ...] + self._vel[None, ...] * horizon   # (10, 24, 3)
+        if step:
+            # Raw extrapolation stretches the skeleton, which is worse than
+            # freezing it. Put every bone back to its measured length.
+            future = np.stack([project_onto_skeleton(f, local) for f in future])
         joints_block = future.reshape(-1)
 
         # Root orientation, normalised by the robot's heading, as 6D. Frozen the
@@ -1170,11 +1201,27 @@ class SmplClipSource(SmplSource):
     comes from the first three of the 72 pose_aa values, the SMPL root joint in
     axis-angle.
 
-    Caveat worth stating: this does not verify the frame convention. The live
-    path maps XR axes into the robot frame and the training pipeline applies
-    smpl_y_up; this takes the stored joints as they are. It is a harness for the
-    extrapolation arithmetic and the observation plumbing, not a claim that a
-    clip replayed here matches what the operator would have produced.
+    STATUS: DOES NOT YET REPRODUCE A WORKING WHOLE-BODY SESSION. The robot falls
+    on every clip tried, while the same policy driven from a live headset stays
+    up. So something about how this builds the skeleton still differs from the
+    live path, and NO A/B run through this harness means anything yet -- in
+    particular it cannot say whether extrapolating the future frames helps.
+
+    Three defects were found and fixed while getting this far, all of which
+    silently corrupted earlier results:
+      * the clip advanced on wall clock, so how far it moved per control step
+        depended on machine load; the same command gave "stayed up" or "FELL at
+        4.9 s" depending on what else was running. Now on simulated time and
+        reproducible to the digit.
+      * stored smpl_joints are not pelvis-centred (pelvis at y = -0.351 in
+        Neutral_walk_forward_002__A057) while the rest of this path puts the
+        pelvis at the origin, so the whole body was displaced ~35 cm sideways.
+      * per-joint linear extrapolation does not preserve bone lengths, 130% at
+        worst on a 180 ms horizon; see project_onto_skeleton.
+
+    What is still unverified: the axis mapping the live path applies via
+    XR_TO_ROBOT, and whether the training pipeline's smpl_y_up handling means
+    the stored joints need a further rotation. That is the next thing to check.
     """
 
     def __init__(self, spec, path, loop=True, extrapolate=False):
@@ -1201,7 +1248,7 @@ class SmplClipSource(SmplSource):
         self.root_aa = aa[:, :3]
         self.fps = float(d.get("fps", 30.0))
         self.duration = len(self.joints) / self.fps
-        self._t0 = None
+        self._step = 0
 
     @staticmethod
     def _aa_to_mat(aa):
@@ -1223,17 +1270,29 @@ class SmplClipSource(SmplSource):
         pass
 
     def _body(self):
-        """The clip at the current wall-clock time, so dt is real."""
-        now = time.perf_counter()
-        if self._t0 is None:
-            self._t0 = now
-        t = now - self._t0
+        """The clip at the current SIMULATED time.
+
+        Wall clock was wrong here. It made how far the clip advanced per control
+        step depend on machine load, so the same command produced "stayed up" or
+        "FELL at 4.9 s" depending on what else was running -- which silently
+        invalidates any A/B done with it. Simulated time is what the policy
+        experiences and is reproducible.
+        """
+        t = self._step * SIM_DT * DECIMATION
+        self._step += 1
         i = int(t * self.fps)
         if i >= len(self.joints):
             if not self.loop:
                 return None
             i %= len(self.joints)
-        return self.joints[i], self._aa_to_mat(self.root_aa[i])
+        # Re-centre on the pelvis. The stored smpl_joints have root TRANSLATION
+        # removed (transl carries it separately) but sit at a fixed offset from
+        # the origin -- pelvis at y = -0.351 in this clip -- whereas
+        # NEUTRAL_SKELETON, and so the rest of this path, puts the pelvis at the
+        # origin. Feeding them raw displaces the whole body ~35 cm sideways and
+        # the robot goes over in 0.3 s.
+        sk = self.joints[i]
+        return sk - sk[0], self._aa_to_mat(self.root_aa[i])
 
 
 class HybridSource:
