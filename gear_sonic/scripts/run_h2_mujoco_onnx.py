@@ -664,22 +664,21 @@ class PicoSource:
         # A, or either trigger. The app has a "Switch w/ A Button" option that
         # intercepts A to toggle transmission, in which case the press never
         # reaches here -- so engaging must not depend on that one button.
-        # Engage on a face button, or on BOTH triggers squeezed together.
+        # Any face button or either trigger.
         #
-        # A single trigger is the gripper control in this repo's own PICO server
-        # -- generate_finger_data() closes the hand above 0.5 -- so binding to
-        # one would re-zero the operator every time they grasped something.
-        # Both at once is not a grasp, so it is safe to use and, unlike A, it
-        # actually reaches the SDK when the headset app's "Switch w/ A Button"
-        # option is intercepting the face button.
-        both_triggers = (self.xrt.get_right_trigger() > 0.5
-                         and self.xrt.get_left_trigger() > 0.5)
+        # A single trigger is the gripper control in the repo's PICO server, but
+        # this runner drives no gripper, so there is nothing for it to clash
+        # with here -- and on a headset whose app intercepts A, a trigger is the
+        # only input that reaches the SDK at all. Requiring both triggers to
+        # avoid a collision that does not exist just left the operator unable to
+        # engage.
         sources = [name for name, held in (
             ("A", bool(self.xrt.get_A_button())),
             ("B", bool(self.xrt.get_B_button())),
             ("X", bool(self.xrt.get_X_button())),
             ("Y", bool(self.xrt.get_Y_button())),
-            ("both triggers", both_triggers),
+            ("right trigger", self.xrt.get_right_trigger() > 0.5),
+            ("left trigger", self.xrt.get_left_trigger() > 0.5),
         ) if held]
         pressed = bool(sources)
         if pressed and not self._prev_a and self.set_zero():
@@ -1307,8 +1306,7 @@ def run(args):
     if hybrid is not None:
         print("mode       3-point; press B for whole body")
     if pico is not None:
-        print("engage     A / B / X / Y, or both triggers together (a single "
-              "trigger is the grip)")
+        print("engage     any of A / B / X / Y, or either trigger")
 
     control_dt = SIM_DT * DECIMATION
     # With the viewer open and no explicit --seconds, run until the window is
