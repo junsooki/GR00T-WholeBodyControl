@@ -874,6 +874,14 @@ class SmplSource(PicoSource):
 
     def _body(self):
         """24 SMPL joints as (positions, root quaternion) in the robot frame."""
+        # Nothing is commanded until the operator engages. The 3-point synthesis
+        # below enforced this by needing a zero, but the body-tracking path did
+        # not: it took the raw skeleton the instant tracking reported and began
+        # driving from whatever pose the operator happened to be in, with no
+        # engage step at all. That reads as the robot adopting a strange stance
+        # on its own, because it is copying a body nobody agreed to send yet.
+        if self.zero is None:
+            return None
         if not self.xrt.is_body_data_available():
             # No Motion Trackers: synthesise the skeleton from the 3 points we do
             # have rather than refusing to run.
