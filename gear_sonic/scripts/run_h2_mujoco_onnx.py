@@ -814,6 +814,20 @@ class SmplSource(PicoSource):
     # worth minimising even where the overall figure is flat: the arms tuck in
     # rather than standing off. Slightly forward of the body beats straight down
     # at every width tried.
+    #
+    # The elbow is placed separately from the wrist rather than interpolated
+    # between shoulder and wrist, because pulling it in independently tucks the
+    # upper arm without splaying the forearm:
+    #
+    #     elbow Y   robot elbow out   shoulders
+    #       0.09        0.281 m        13.1 deg
+    #       0.06        0.265 m         9.5 deg
+    #       0.03        0.259 m         8.7 deg   (this)
+    #       0.00        0.259 m         9.6 deg
+    #
+    # It stops improving at 0.03 -- pulling the reference elbow to the
+    # centreline does not bring the robot's any closer, since H2's upper arm
+    # cannot fold that far.
     NEUTRAL_SKELETON = np.array([
         [0.00, 0.00, 0.00],   # 0  pelvis
         [0.00, 0.09, -0.08],  # 1  L hip
@@ -833,8 +847,8 @@ class SmplSource(PicoSource):
         [0.00, 0.00, 0.60],   # 15 head
         [0.00, 0.17, 0.45],   # 16 L shoulder
         [0.00, -0.17, 0.45],  # 17 R shoulder
-        [0.06, 0.09, 0.18],   # 18 L elbow
-        [0.06, -0.09, 0.18],  # 19 R elbow
+        [0.06, 0.03, 0.18],   # 18 L elbow
+        [0.06, -0.03, 0.18],  # 19 R elbow
         [0.13, 0.11, -0.08],  # 20 L wrist
         [0.13, -0.11, -0.08], # 21 R wrist
         [0.14, 0.11, -0.16],  # 22 L hand
