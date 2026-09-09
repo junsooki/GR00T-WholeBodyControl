@@ -878,6 +878,7 @@ class SmplSource(PicoSource):
         # The base skeleton holds the arms in the body plane; ARM_FORWARD moves
         # them out in front, which is what makes the robot's shoulders sit near
         # rest instead of swung back.
+        self._warned_estimated = False
         self.skeleton = self.NEUTRAL_SKELETON.copy()
         self.skeleton[list(self.ARM_JOINTS), 0] += self.ARM_FORWARD
         self.duration = float("inf")
@@ -953,15 +954,24 @@ class SmplSource(PicoSource):
         # on its own, because it is copying a body nobody agreed to send yet.
         if self.zero is None:
             return None
-        # Gate on trackers actually being paired, not on body data merely being
-        # offered. The PICO reports is_body_data_available() == True with zero
-        # Motion Trackers, solving a whole skeleton from three points -- so the
-        # legs it hands back are inferred, not measured. Copying inferred legs
-        # onto the robot is worse than not driving them at all: it walks the
-        # centre of mass around on guesswork and topples. With no trackers,
-        # synthesise instead and keep the legs in a known standing pose.
-        if self.xrt.num_motion_data_available() < 1 or not self.xrt.is_body_data_available():
+        # Real body data whenever the headset offers it, so the legs are driven
+        # rather than held. With no Motion Trackers paired the PICO still solves
+        # a 24-joint skeleton from three points, and its legs are inferred
+        # rather than measured -- which once put the robot on the floor at 38 s.
+        # That failure had two mechanisms, both since closed: the skeleton was
+        # applied with no rate limit, and body data bypassed the engage gate
+        # entirely. It is worth using now, but the operator should know which
+        # kind of legs they are driving.
+        if not self.xrt.is_body_data_available():
             return self._body_from_3point()
+        if not self._warned_estimated:
+            self._warned_estimated = True
+            if self.xrt.num_motion_data_available() < 1:
+                print("  [pico] whole body from an ESTIMATED skeleton -- no Motion "
+                      "Trackers paired, so the legs are solved from 3 points, not measured")
+            else:
+                print(f"  [pico] whole body from "
+                      f"{self.xrt.num_motion_data_available()} tracker(s)")
         raw = np.asarray(self.xrt.get_body_joints_pose(), dtype=np.float64)
         if raw.shape != (self.NUM_SMPL_JOINTS, 7):
             return None
