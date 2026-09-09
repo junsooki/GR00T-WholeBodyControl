@@ -664,17 +664,22 @@ class PicoSource:
         # A, or either trigger. The app has a "Switch w/ A Button" option that
         # intercepts A to toggle transmission, in which case the press never
         # reaches here -- so engaging must not depend on that one button.
-        # Face buttons only. Triggers and grips are the gripper controls in this
-        # repo's own PICO server -- generate_finger_data() closes the hand above
-        # 0.5 -- so engaging on a trigger would re-zero every time the operator
-        # grasped something. All four faces are accepted rather than just A,
-        # because the headset app's "Switch w/ A Button" option intercepts A and
-        # would otherwise leave no way in.
+        # Engage on a face button, or on BOTH triggers squeezed together.
+        #
+        # A single trigger is the gripper control in this repo's own PICO server
+        # -- generate_finger_data() closes the hand above 0.5 -- so binding to
+        # one would re-zero the operator every time they grasped something.
+        # Both at once is not a grasp, so it is safe to use and, unlike A, it
+        # actually reaches the SDK when the headset app's "Switch w/ A Button"
+        # option is intercepting the face button.
+        both_triggers = (self.xrt.get_right_trigger() > 0.5
+                         and self.xrt.get_left_trigger() > 0.5)
         sources = [name for name, held in (
             ("A", bool(self.xrt.get_A_button())),
             ("B", bool(self.xrt.get_B_button())),
             ("X", bool(self.xrt.get_X_button())),
             ("Y", bool(self.xrt.get_Y_button())),
+            ("both triggers", both_triggers),
         ) if held]
         pressed = bool(sources)
         if pressed and not self._prev_a and self.set_zero():
@@ -1179,7 +1184,9 @@ def run(args):
     if pico is not None:
         print()
         print("  Stand in the robot's stance -- arms relaxed, facing forward -- then press")
-        print("  A, B, X or Y to engage. Press again at any time to re-zero.")
+        print("  A, B, X or Y -- or squeeze BOTH triggers together -- to engage.")
+        print("  Do it again at any time to re-zero. A single trigger is the grip,")
+        print("  so it will not engage.")
         print("  Nothing is commanded until you do.")
         print()
     print(f"armature   {'applied' if not args.no_armature else 'off'}   "
