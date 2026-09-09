@@ -840,11 +840,11 @@ class SmplSource(PicoSource):
         [0.12, 0.09, -0.94],  # 10 L foot
         [0.12, -0.09, -0.94], # 11 R foot
         [0.00, 0.00, 0.50],   # 12 neck
-        [0.00, 0.08, 0.44],   # 13 L collar
-        [0.00, -0.08, 0.44],  # 14 R collar
+        [0.04, 0.08, 0.44],   # 13 L collar
+        [0.04, -0.08, 0.44],  # 14 R collar
         [0.00, 0.00, 0.60],   # 15 head
-        [0.00, 0.17, 0.45],   # 16 L shoulder
-        [0.00, -0.17, 0.45],  # 17 R shoulder
+        [0.08, 0.17, 0.45],   # 16 L shoulder
+        [0.08, -0.17, 0.45],  # 17 R shoulder
         [0.00, 0.03, 0.18],   # 18 L elbow
         [0.00, -0.03, 0.18],  # 19 R elbow
         [0.00, 0.11, -0.08],  # 20 L wrist
@@ -855,23 +855,25 @@ class SmplSource(PicoSource):
 
     # Arm joints the forward offset moves: collars, shoulders, elbows, wrists, hands.
     ARM_JOINTS = (13, 14, 16, 17, 18, 19, 20, 21, 22, 23)
-    # How far in front of the body the reference arms sit.
+    # How far in front of the body the reference arms sit, with the shoulder
+    # itself pushed forward another 0.08 on top.
     #
-    # Tuned so the arm hangs vertically -- wrist directly under the shoulder --
-    # not so it matches H2's rest pose. Those are different targets: H2's rest
-    # pose holds the wrist 16.6 cm in front of the shoulder, so minimising
-    # deviation from it pushes the arms forward and the robot stoops to carry
-    # them. Measuring the arm's own angle from vertical instead:
+    # Tuned against the arm's own geometry, not against deviation from H2's rest
+    # pose -- that rest pose holds the wrist 16.6 cm in front of the shoulder and
+    # the elbow at 120 degrees, so matching it makes the robot stoop and keeps
+    # the elbow bent. The three targets pull against each other: straightening
+    # the elbow swings the arm backward, and pushing the arm forward to correct
+    # that tips the torso.
     #
-    #     arm fwd   arm from vertical   torso lean   wobble   min height
-    #       0.00         6.6 deg          -4.6 deg   6.2 mm     0.994
-    #       0.05         2.1 deg          +3.3 deg   0.8 mm     0.998   (this)
-    #       0.10         4.8 deg          +4.5 deg   0.5 mm     1.005
-    #       0.15         7.6 deg          +5.9 deg   0.9 mm     0.999
+    #   elbow  arm fwd  sh fwd    elbow   from vertical   torso
+    #    0.60     0.05    0.00   119.9         +2.1        +3.3
+    #    1.20     0.05    0.08   161.9        -21.2        -0.3
+    #    1.20     0.25    0.08   162.0        -11.5       +16.0
+    #    1.00     0.15    0.08   156.1         -8.3        +4.6   (this)
     #
-    # Arms within a couple of degrees of straight down, torso within a few of
-    # upright, and no meaningful stability cost.
-    ARM_FORWARD = 0.05
+    # 156 degrees at the elbow against 120, arm within 8 degrees of straight
+    # down, torso within 5 of upright, holding 1.002.
+    ARM_FORWARD = 0.15
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
         super().__init__(position_gain=position_gain, track_head=track_head)
@@ -1481,8 +1483,8 @@ def main(argv=None):
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
-    p.add_argument("--elbow", type=float,
-                   help="override the elbow rest angle in radians (default 0.60). "
+    p.add_argument("--elbow", type=float, default=1.00,
+                   help="elbow rest angle in radians (default 1.00). "
                         "HIGHER is straighter, not lower: the arm's included angle "
                         "is 130 deg at 0.60, 118 deg at 0.35, and peaks at 153 deg "
                         "around 1.40, which is as straight as H2's arm gets.")
