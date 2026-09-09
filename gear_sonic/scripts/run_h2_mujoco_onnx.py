@@ -857,22 +857,21 @@ class SmplSource(PicoSource):
     ARM_JOINTS = (13, 14, 16, 17, 18, 19, 20, 21, 22, 23)
     # How far in front of the body the reference arms sit.
     #
-    # This trades the arm pose against how upright the robot stands, and the
-    # torso is the one that matters. Arms out in front carry the mass forward
-    # and the robot leans to hold it -- measured as the torso's tilt from
-    # vertical, with the reference legs moved forward to match:
+    # Tuned so the arm hangs vertically -- wrist directly under the shoulder --
+    # not so it matches H2's rest pose. Those are different targets: H2's rest
+    # pose holds the wrist 16.6 cm in front of the shoulder, so minimising
+    # deviation from it pushes the arms forward and the robot stoops to carry
+    # them. Measuring the arm's own angle from vertical instead:
     #
-    #     arm fwd   torso lean   shoulder   wobble   min height
-    #       0.00      -4.6 deg    36.7 deg   6.2 mm     0.994
-    #       0.10      +4.5 deg    24.9 deg   0.5 mm     1.005   (this)
-    #       0.18     +13.4 deg    12.0 deg   1.7 mm     0.997
-    #       0.26     +22.2 deg     0.4 deg   0.6 mm     0.985
+    #     arm fwd   arm from vertical   torso lean   wobble   min height
+    #       0.00         6.6 deg          -4.6 deg   6.2 mm     0.994
+    #       0.05         2.1 deg          +3.3 deg   0.8 mm     0.998   (this)
+    #       0.10         4.8 deg          +4.5 deg   0.5 mm     1.005
+    #       0.15         7.6 deg          +5.9 deg   0.9 mm     0.999
     #
-    # 0.26 gives the best-looking arms and a 22 degree stoop, which is worse on
-    # every other axis: lower, and holding a lean it does not need. Standing
-    # upright costs arm pose and buys height, stability and a posture that reads
-    # as a robot standing rather than one about to fall over.
-    ARM_FORWARD = 0.10
+    # Arms within a couple of degrees of straight down, torso within a few of
+    # upright, and no meaningful stability cost.
+    ARM_FORWARD = 0.05
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
         super().__init__(position_gain=position_gain, track_head=track_head)
