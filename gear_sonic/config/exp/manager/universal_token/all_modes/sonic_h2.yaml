@@ -37,6 +37,17 @@ critic_prop_history_length: 10
 critic_actions_history_length: 10
 
 manager_env:
+  observations:
+    tokenizer:
+      # Same G1 assumption as wrist_mujoco_dof_indices below, in a second place.
+      # The term defaults to joints_idx [23..28], which are G1's six wrists. On
+      # H2's 31-DOF IsaacLab order those are left_elbow, right_elbow,
+      # left/right_wrist_roll and left/right_wrist_pitch -- so the SMPL encoder
+      # was fed both elbows in place of wrists and never saw either wrist_yaw.
+      # H2's wrists are 25-30.
+      joint_pos_multi_future_wrist_for_smpl:
+        params:
+          joints_idx: [25, 26, 27, 28, 29, 30]
   rewards:
     feet_acc:
       weight: -2.5e-6

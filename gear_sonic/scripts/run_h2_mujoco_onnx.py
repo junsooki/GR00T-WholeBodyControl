@@ -740,19 +740,49 @@ class SmplSource(PicoSource):
     SIZE = 720 + 60 + 60
     NUM_SMPL_JOINTS = 24
 
+    # What the shipped checkpoint was trained with (G1's wrist indices).
+    SMPL_WRIST_IDX = (23, 24, 25, 26, 27, 28)
+    # What H2's wrists actually are; use these after retraining with the
+    # corrected sonic_h2.yaml.
+    SMPL_WRIST_IDX_CORRECT = (25, 26, 27, 28, 29, 30)
+
     # A neutral standing skeleton, root-relative, in the robot frame. Used when
-    # body tracking has not started yet. The obvious fallback -- zeros -- is a
-    # skeleton with every joint collapsed onto the pelvis, which is not a pose
-    # at all: the policy reads it as a body folded into a point and topples in
-    # about a third of a second. "Stand" is the only safe thing to say when the
-    # tracker has told you nothing.
+    # body tracking has not started yet.
+    #
+    # Two ways to get this wrong, both of which produce visible nonsense:
+    #   zeros    every joint collapsed onto the pelvis, which is not a pose at
+    #            all -- the policy reads a body folded into a point and topples
+    #            in about a third of a second.
+    #   T-pose   arms straight out to the sides. The policy tracks it faithfully,
+    #            so the robot stands there with its arms raised 50 degrees off
+    #            default, which reads as broken but is the reference being
+    #            copied correctly.
+    # Arms hang at the sides here, which is what a person standing still does.
     NEUTRAL_SKELETON = np.array([
-        [0.0, 0.00, 0.00], [0.0, 0.09, -0.08], [0.0, -0.09, -0.08], [0.0, 0.00, 0.12],
-        [0.0, 0.09, -0.48], [0.0, -0.09, -0.48], [0.0, 0.00, 0.25], [0.0, 0.09, -0.88],
-        [0.0, -0.09, -0.88], [0.0, 0.00, 0.32], [0.12, 0.09, -0.94], [0.12, -0.09, -0.94],
-        [0.0, 0.00, 0.50], [0.0, 0.08, 0.44], [0.0, -0.08, 0.44], [0.0, 0.00, 0.60],
-        [0.0, 0.17, 0.45], [0.0, -0.17, 0.45], [0.0, 0.43, 0.45], [0.0, -0.43, 0.45],
-        [0.0, 0.68, 0.45], [0.0, -0.68, 0.45], [0.0, 0.78, 0.45], [0.0, -0.78, 0.45],
+        [0.00, 0.00, 0.00],   # 0  pelvis
+        [0.00, 0.09, -0.08],  # 1  L hip
+        [0.00, -0.09, -0.08], # 2  R hip
+        [0.00, 0.00, 0.12],   # 3  spine1
+        [0.00, 0.09, -0.48],  # 4  L knee
+        [0.00, -0.09, -0.48], # 5  R knee
+        [0.00, 0.00, 0.25],   # 6  spine2
+        [0.00, 0.09, -0.88],  # 7  L ankle
+        [0.00, -0.09, -0.88], # 8  R ankle
+        [0.00, 0.00, 0.32],   # 9  spine3
+        [0.12, 0.09, -0.94],  # 10 L foot
+        [0.12, -0.09, -0.94], # 11 R foot
+        [0.00, 0.00, 0.50],   # 12 neck
+        [0.00, 0.08, 0.44],   # 13 L collar
+        [0.00, -0.08, 0.44],  # 14 R collar
+        [0.00, 0.00, 0.60],   # 15 head
+        [0.00, 0.17, 0.45],   # 16 L shoulder
+        [0.00, -0.17, 0.45],  # 17 R shoulder
+        [0.00, 0.19, 0.18],   # 18 L elbow   -- hanging, not out to the side
+        [0.00, -0.19, 0.18],  # 19 R elbow
+        [0.00, 0.20, -0.08],  # 20 L wrist
+        [0.00, -0.20, -0.08], # 21 R wrist
+        [0.02, 0.20, -0.16],  # 22 L hand
+        [0.02, -0.20, -0.16], # 23 R hand
     ])
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
@@ -797,9 +827,17 @@ class SmplSource(PicoSource):
 
         # Wrist DOF targets. Body tracking gives no robot joint angles, so hold
         # the default; the head reads these as the reference wrist pose.
-        wrist = self.spec.default_il[
-            [self.spec.mj_to_il[i] for i in (21, 22, 23, 28, 29, 30)]
-        ]
+        #
+        # These are IsaacLab indices 23-28, which on H2 are the two elbows and
+        # four of the six wrist joints -- NOT H2's actual wrists (25-30). That is
+        # deliberate. The observation term
+        # joint_pos_multi_future_wrist_for_smpl defaults to G1's [23..28] and
+        # sonic_h2.yaml did not override it, so the shipped checkpoint was
+        # trained on those slots. Feeding the anatomically correct wrists to
+        # weights trained on elbows produces exactly the odd arm behaviour this
+        # is meant to avoid. sonic_h2.yaml now corrects the indices, so once the
+        # policy is retrained this must become SMPL_WRIST_IDX_CORRECT below.
+        wrist = self.spec.default_il[list(self.SMPL_WRIST_IDX)]
         wrist_block = np.tile(wrist, NUM_FUTURE_FRAMES)
 
         block = np.concatenate([joints_block, ori_block, wrist_block])
