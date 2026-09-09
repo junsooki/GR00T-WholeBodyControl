@@ -1129,7 +1129,19 @@ def run(args):
     if args.elbow is not None:
         # H2 inherits G1's 0.6 rad elbow default verbatim, which is G1's
         # mid-range but not H2's -- H2 flexes to 3.07 rad where G1 stops at 2.09.
-        # This is the action offset the policy was trained against, so moving it
+        #
+        # The joint value does not read as "bend": raising it STRAIGHTENS the
+        # arm. Measured as the included angle at the elbow, 180 being straight:
+        #
+        #     0.00 -> 100 deg     1.00 -> 147 deg
+        #     0.35 -> 118 deg     1.40 -> 153 deg   (maximum)
+        #     0.60 -> 130 deg     2.00 -> 134 deg
+        #     0.80 -> 139 deg     3.00 ->  82 deg
+        #
+        # The link geometry has a built-in offset, so the arm never reaches 180
+        # at any joint value. Past 1.40 it folds the other way.
+        #
+        # This is also the action offset the policy trained against, so moving it
         # shifts every command the policy makes; the arms are not load bearing,
         # so it is survivable, but it is not free. Measure with
         # test_h2_teleop_scenarios.py before trusting a new value.
@@ -1137,8 +1149,7 @@ def run(args):
             if name.endswith("elbow"):
                 spec.default_mj[i] = args.elbow
         spec.default_il = spec.default_mj[spec.il_to_mj]
-        print(f"elbow      default {args.elbow:.2f} rad "
-              f"({math.degrees(args.elbow):.0f} deg, was 0.60 / 34 deg)")
+        print(f"elbow      rest angle {args.elbow:.2f} rad (default 0.60)")
     data = mujoco.MjData(model)
 
     session = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
@@ -1396,8 +1407,10 @@ def main(argv=None):
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
     p.add_argument("--elbow", type=float,
-                   help="override the elbow rest angle in radians (default 0.60, "
-                        "inherited from G1). Lower is straighter.")
+                   help="override the elbow rest angle in radians (default 0.60). "
+                        "HIGHER is straighter, not lower: the arm's included angle "
+                        "is 130 deg at 0.60, 118 deg at 0.35, and peaks at 153 deg "
+                        "around 1.40, which is as straight as H2's arm gets.")
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--band", action="store_true",
