@@ -835,22 +835,30 @@ class SmplSource(PicoSource):
         [0.12, 0.09, -0.94],  # 10 L foot
         [0.12, -0.09, -0.94], # 11 R foot
         [0.00, 0.00, 0.50],   # 12 neck
-        [0.13, 0.08, 0.44],   # 13 L collar
-        [0.13, -0.08, 0.44],  # 14 R collar
+        [0.00, 0.08, 0.44],   # 13 L collar
+        [0.00, -0.08, 0.44],  # 14 R collar
         [0.00, 0.00, 0.60],   # 15 head
-        [0.26, 0.17, 0.45],   # 16 L shoulder  -- forward
-        [0.26, -0.17, 0.45],  # 17 R shoulder
-        [0.26, 0.03, 0.18],   # 18 L elbow     -- hanging straight down
-        [0.26, -0.03, 0.18],  # 19 R elbow
-        [0.26, 0.11, -0.08],  # 20 L wrist
-        [0.26, -0.11, -0.08], # 21 R wrist
-        [0.27, 0.11, -0.16],  # 22 L hand
-        [0.27, -0.11, -0.16], # 23 R hand
+        [0.00, 0.17, 0.45],   # 16 L shoulder
+        [0.00, -0.17, 0.45],  # 17 R shoulder
+        [0.00, 0.03, 0.18],   # 18 L elbow
+        [0.00, -0.03, 0.18],  # 19 R elbow
+        [0.00, 0.11, -0.08],  # 20 L wrist
+        [0.00, -0.11, -0.08], # 21 R wrist
+        [0.01, 0.11, -0.16],  # 22 L hand
+        [0.01, -0.11, -0.16], # 23 R hand
     ])
 
-    def __init__(self, spec, position_gain=1.0, track_head=True):
+    # Arm joints the forward offset moves: collars, shoulders, elbows, wrists, hands.
+    ARM_JOINTS = (13, 14, 16, 17, 18, 19, 20, 21, 22, 23)
+
+    def __init__(self, spec, position_gain=1.0, track_head=True, arm_forward=0.26):
         super().__init__(position_gain=position_gain, track_head=track_head)
         self.spec = spec
+        # The base skeleton holds the arms in the body plane; how far forward
+        # they sit is the one knob worth exposing, because it trades arm pose
+        # against balance headroom rather than simply being better or worse.
+        self.skeleton = self.NEUTRAL_SKELETON.copy()
+        self.skeleton[list(self.ARM_JOINTS), 0] += arm_forward
         self.duration = float("inf")
         self._last_block = None
 
@@ -877,7 +885,7 @@ class SmplSource(PicoSource):
         current = self._read()
         if not self.live:
             return None
-        sk = self.NEUTRAL_SKELETON.copy()
+        sk = self.skeleton.copy()
         gain = self.gain
         # Rate limited exactly as the 3-point path is. Raw deltas were what
         # toppled that one: a tracker glitch or the first frame after zeroing
@@ -962,7 +970,7 @@ class SmplSource(PicoSource):
             # 3-point case since it moves the legs too.
             if self._last_block is not None:
                 return self._last_block
-            joints = self.NEUTRAL_SKELETON.copy()
+            joints = self.skeleton.copy()
             root_rot = np.eye(3)
         else:
             joints, root_rot = body
@@ -1193,14 +1201,16 @@ def run(args):
         pico = PicoSource(position_gain=args.pico_gain, track_head=not args.pico_no_head)
         hybrid = HybridSource(spec, model, mujoco, pico,
                               SmplSource(spec, position_gain=args.pico_gain,
-                                         track_head=not args.pico_no_head))
+                                         track_head=not args.pico_no_head,
+                                         arm_forward=args.arm_forward))
         hybrid.smpl.xrt = pico.xrt          # one SDK connection, shared
         reference = hybrid
     elif args.reference == "static":
         reference = StaticReference(spec)
     elif args.reference == "smpl":
         pico = SmplSource(spec, position_gain=args.pico_gain,
-                          track_head=not args.pico_no_head)
+                          track_head=not args.pico_no_head,
+                          arm_forward=args.arm_forward)
         reference = pico
     elif args.reference == "teleop":
         target_fn = None
@@ -1431,6 +1441,11 @@ def main(argv=None):
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
+    p.add_argument("--arm-forward", type=float, default=0.26,
+                   help="how far forward the reference arms sit, in metres. Trades arm "
+                        "pose against balance headroom: 0.26 gives the best-looking arms "
+                        "(4 deg from rest) but 6 mm of pelvis wobble, 0.18 gives 17 deg "
+                        "and 0.7 mm. Prefer 0.18 for anything dynamic.")
     p.add_argument("--elbow", type=float,
                    help="override the elbow rest angle in radians (default 0.60). "
                         "HIGHER is straighter, not lower: the arm's included angle "
