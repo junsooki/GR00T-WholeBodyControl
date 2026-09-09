@@ -796,6 +796,19 @@ class SmplSource(PicoSource):
     #            default, which reads as broken but is the reference being
     #            copied correctly.
     # Arms hang at the sides here, which is what a person standing still does.
+    #
+    # The exact arm placement is tuned, not anatomical. What matters is where the
+    # policy puts the robot's shoulders after retargeting, and that is not
+    # obvious from the skeleton: a plausible-looking human pose can retarget to
+    # arms held out. Sweeping how far the arms hang out and forward and measuring
+    # the resulting shoulder deviation from H2's rest pose:
+    #
+    #     out 0.20  fwd 0.16  ->  13.3 deg   (this)
+    #     out 0.26  fwd 0.08  ->  18.6 deg
+    #     out 0.20  fwd 0.00  ->  17.7 deg
+    #     out 0.38  fwd 0.00  ->  34.1 deg
+    #
+    # so the arms sit slightly forward of the body rather than straight down.
     NEUTRAL_SKELETON = np.array([
         [0.00, 0.00, 0.00],   # 0  pelvis
         [0.00, 0.09, -0.08],  # 1  L hip
@@ -815,12 +828,12 @@ class SmplSource(PicoSource):
         [0.00, 0.00, 0.60],   # 15 head
         [0.00, 0.17, 0.45],   # 16 L shoulder
         [0.00, -0.17, 0.45],  # 17 R shoulder
-        [0.00, 0.19, 0.18],   # 18 L elbow   -- hanging, not out to the side
-        [0.00, -0.19, 0.18],  # 19 R elbow
-        [0.00, 0.20, -0.08],  # 20 L wrist
-        [0.00, -0.20, -0.08], # 21 R wrist
-        [0.02, 0.20, -0.16],  # 22 L hand
-        [0.02, -0.20, -0.16], # 23 R hand
+        [0.06, 0.17, 0.18],   # 18 L elbow
+        [0.06, -0.17, 0.18],  # 19 R elbow
+        [0.13, 0.20, -0.08],  # 20 L wrist
+        [0.13, -0.20, -0.08], # 21 R wrist
+        [0.14, 0.20, -0.16],  # 22 L hand
+        [0.14, -0.20, -0.16], # 23 R hand
     ])
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
