@@ -1126,6 +1126,19 @@ def run(args):
     import onnxruntime as ort
 
     model, spec = build_scene(mujoco, add_armature=not args.no_armature)
+    if args.elbow is not None:
+        # H2 inherits G1's 0.6 rad elbow default verbatim, which is G1's
+        # mid-range but not H2's -- H2 flexes to 3.07 rad where G1 stops at 2.09.
+        # This is the action offset the policy was trained against, so moving it
+        # shifts every command the policy makes; the arms are not load bearing,
+        # so it is survivable, but it is not free. Measure with
+        # test_h2_teleop_scenarios.py before trusting a new value.
+        for i, name in enumerate(spec.mj_joints):
+            if name.endswith("elbow"):
+                spec.default_mj[i] = args.elbow
+        spec.default_il = spec.default_mj[spec.il_to_mj]
+        print(f"elbow      default {args.elbow:.2f} rad "
+              f"({math.degrees(args.elbow):.0f} deg, was 0.60 / 34 deg)")
     data = mujoco.MjData(model)
 
     session = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
@@ -1189,26 +1202,15 @@ def run(args):
             f"{ {'teleop': 'teleop', 'smpl': 'smpl'}.get(args.reference, 'g1') } "
             f"head; pass the matching --onnx."
         )
-    print(f"model      {os.path.basename(args.onnx)}  input {expected}  "
-          f"(reference {ref_size} + proprioception {proprio.size})")
-    print(f"reference  {reference.name}" + (f"  '{reference.key}'" if args.reference == "motion" else ""))
+    print(f"model      {os.path.basename(args.onnx)}   reference {reference.name}")
     if args.band:
         rel = f", released at {args.band_release:.1f}s" if args.band_release else ""
         print(f"band       suspended at {args.height:.2f} m{rel}")
-    print("head       " + ("following the headset" if (pico and not args.pico_no_head)
-                            else "commanded level and forward"))
     if hybrid is not None:
-        print("mode       starting on 3-point; press B to promote to whole body")
+        print("mode       3-point; press B for whole body")
     if pico is not None:
-        print()
-        print("  Stand in the robot's stance -- arms relaxed, facing forward -- then press")
-        print("  A, B, X or Y -- or squeeze BOTH triggers together -- to engage.")
-        print("  Do it again at any time to re-zero. A single trigger is the grip,")
-        print("  so it will not engage.")
-        print("  Nothing is commanded until you do.")
-        print()
-    print(f"armature   {'applied' if not args.no_armature else 'off'}   "
-          f"control 1/{DECIMATION} of {1 / SIM_DT:.0f} Hz = {1 / (SIM_DT * DECIMATION):.0f} Hz")
+        print("engage     A / B / X / Y, or both triggers together (a single "
+              "trigger is the grip)")
 
     control_dt = SIM_DT * DECIMATION
     # With the viewer open and no explicit --seconds, run until the window is
@@ -1220,8 +1222,6 @@ def run(args):
     else:
         horizon = min(reference.duration, 30.0)
     n_control = None if math.isinf(horizon) else int(horizon / control_dt)
-    print(f"horizon    {'until the viewer window is closed' if n_control is None else '%.1f s' % horizon}"
-          + ("   (real time)" if args.viewer else ""))
 
     n_frames = 0
     heights, fell_at = [], None
@@ -1395,6 +1395,9 @@ def main(argv=None):
     p.add_argument("--motion-key", help="motion name inside the PKL (default: the first)")
     p.add_argument("--seconds", type=float, default=0.0, help="0 = the reference's own length")
     p.add_argument("--height", type=float, default=INIT_HEIGHT, help="initial pelvis height")
+    p.add_argument("--elbow", type=float,
+                   help="override the elbow rest angle in radians (default 0.60, "
+                        "inherited from G1). Lower is straighter.")
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--band", action="store_true",
