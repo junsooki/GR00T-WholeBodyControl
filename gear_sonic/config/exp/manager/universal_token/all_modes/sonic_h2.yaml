@@ -76,7 +76,22 @@ manager_env:
     motion:
       reward_point_body: ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
       reward_point_body_offset: [[0.0, 0.0, 0.5], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
-      # 14 tracked bodies; feet corrected to H2's distal ankle body (see above).
+      # 15 tracked bodies: the 14 from the G1 recipe, plus head_yaw_link.
+      #
+      # G1 has no head, so the v1.1 reward set is entirely body level with
+      # nothing on the head. Ported to H2 unchanged, head_yaw and head_pitch
+      # drive no tracked body and are therefore position-unconstrained:
+      # anti_shake_ang_vel penalises head angular VELOCITY only, and
+      # joint_limit does not fire until 1.745 rad. The measured result is a head
+      # that settles ~58 deg off-axis and oscillates through ~100 deg, at zero
+      # reward cost, invisible to every metric because no metric watches an
+      # untracked body. Adding head_yaw_link puts it inside the tracking terms.
+      #
+      # This changes num_bodies 14 -> 15, so it changes the observation width
+      # (num_bodies * 13, and num_future_frames * num_bodies * 3). It CANNOT be
+      # applied to a resume -- the 100000-step checkpoint's input layer will not
+      # fit. Fresh run only.
+      #
       # Every entry of reward_point_body must also appear here -- commands.py:158
       # does body_names.index(name) and raises otherwise.
       body_names: [
@@ -94,6 +109,7 @@ manager_env:
         "right_shoulder_roll_link",
         "right_elbow_link",
         "right_wrist_yaw_link",
+        "head_yaw_link",
       ]
       num_future_frames: 10
       dt_future_ref_frames: 0.1
@@ -108,6 +124,9 @@ manager_env:
       # motion_lib defaults these to G1's 29-DOF layout (19-21/26-28), which on
       # H2's 31-DOF order is shoulder_yaw and elbow. H2's wrists live here.
       wrist_mujoco_dof_indices: [21, 22, 23, 28, 29, 30]
+      # NOTE: the observation term joint_pos_multi_future_wrist_for_smpl carries
+      # its OWN joints_idx and is a different setting from the line above. Its
+      # shared default is G1's [23..28], overridden below -- see `observations`.
 
       motion_lib_cfg:
         adaptive_sampling:
@@ -121,6 +140,27 @@ manager_env:
         smpl_y_up: true
         asset:
           assetFileName: "h2.xml"
+
+  observations:
+    tokenizer:
+      # The smpl head's wrist reference reads its own joints_idx, which is a
+      # DIFFERENT setting from commands.motion.wrist_mujoco_dof_indices above.
+      # Its shared default is G1's Isaac Lab [23..28] and is labelled "wrist
+      # joints" in terms/joint_pos_multi_future_wrist_for_smpl.yaml -- true on
+      # G1's 29 DOF order, wrong on H2's 31. On H2 those slots are:
+      #
+      #   23 left_elbow        24 right_elbow        <- elbows, not wrists
+      #   25 left_wrist_roll   26 right_wrist_roll
+      #   27 left_wrist_pitch  28 right_wrist_pitch
+      #   29 left_wrist_yaw    30 right_wrist_yaw    <- both EXCLUDED
+      #
+      # So the 100000-step run trained this head with both elbows in and both
+      # wrist_yaw out. H2's wrists in the same semantic order (roll L/R, pitch
+      # L/R, yaw L/R) are 25..30. Changing this changes what the head reads, so
+      # it cannot be applied to a resume -- fresh run only.
+      joint_pos_multi_future_wrist_for_smpl:
+        params:
+          joints_idx: [25, 26, 27, 28, 29, 30]
 
 algo:
   config:
