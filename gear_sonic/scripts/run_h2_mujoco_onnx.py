@@ -37,12 +37,47 @@ Reference sources:
     A motion-library PKL as written by
     ``gear_sonic/data_process/convert_h2_csv_to_motion_lib.py``.
 
+``teleop``  (3-point, arms only)
+    The ``teleop`` head. Three targets drive the robot: left hand, right hand,
+    head, matching ``vr_3point_body`` in
+    ``config/manager_env/commands/terms/motion.yaml``
+    (``left_wrist_yaw_link``, ``right_wrist_yaw_link``, ``torso_link``). The
+    legs track a frozen standing reference, so **the operator's legs do
+    nothing** -- that is the architecture of this head, not a tuning problem.
+    Needs no motion data. Hand targets are clamped to 0.30 m from the default
+    pose: past that the policy cannot reach the commanded pose, so the operator
+    moves and the robot does not follow. See ``PicoTargets`` for the two sweeps
+    that set that number.
+
+``smpl``  (whole body)
+    The ``smpl`` head. Takes the full 24-joint SMPL skeleton, so the operator's
+    legs drive the robot's legs. **Requires PICO Motion Trackers** --
+    controllers alone cannot report legs. Falls back to a neutral standing
+    skeleton until tracking starts.
+
 Usage::
 
+    # no hardware, checks the observation layout and gains first
     .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py --seconds 10
     .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py --viewer
+
+    # replay a retargeted motion
     .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
         --reference motion --motion-file data/h2_motions/robot.pkl --video out.mp4
+
+    # 3-point teleop, scripted wave -- no headset needed, proves the path works
+    .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
+        --reference teleop --wave --viewer
+
+    # 3-point teleop, live from a PICO headset and two controllers
+    #   (the XRoboToolkit PC service must already be running)
+    .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
+        --reference teleop --pico --viewer --camera head
+
+    # whole-body teleop, needs PICO Motion Trackers on the legs
+    #   --band suspends the robot so a fall does not end the session
+    .venv/bin/python gear_sonic/scripts/run_h2_mujoco_onnx.py \
+        --reference smpl --pico --band --band-release 20 --viewer
 """
 
 from __future__ import annotations
