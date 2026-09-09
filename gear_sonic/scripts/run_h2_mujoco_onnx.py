@@ -498,15 +498,21 @@ class ElasticBand:
     unitree_sdk2py, which this runner deliberately does not depend on.
     """
 
-    def __init__(self, height=1.04, stiffness=10000.0, damping=1000.0,
-                 ang_stiffness=1000.0, ang_damping=10.0):
-        self.point = np.array([0.0, 0.0, height])
+    def __init__(self, height=1.04, stiffness=2000.0, damping=200.0,
+                 ang_stiffness=200.0, ang_damping=20.0):
+        self.height = height
         self.kp_pos, self.kd_pos = stiffness, damping
         self.kp_ang, self.kd_ang = ang_stiffness, ang_damping
         self.enabled = True
 
     def wrench(self, pos, quat, lin_vel, ang_vel):
-        force = self.kp_pos * (self.point - pos) - self.kd_pos * lin_vel
+        # Vertical only. Constraining x and y as well makes it an anchor rather
+        # than a band: the robot cannot shift its weight or step, and hangs in
+        # place looking like it is floating. A physical elastic band takes weight
+        # off the robot and leaves it free to move horizontally, so this does the
+        # same -- z error and z damping, nothing lateral.
+        force = np.array([0.0, 0.0,
+                          self.kp_pos * (self.height - pos[2]) - self.kd_pos * lin_vel[2]])
         # Rotation vector of the pelvis attitude: torque pulls it back upright.
         w = np.clip(quat[0], -1.0, 1.0)
         angle = 2.0 * math.acos(w)
@@ -1262,8 +1268,9 @@ def main(argv=None):
     p.add_argument("--no-armature", action="store_true",
                    help="skip applying Isaac Lab's actuator armature to the MuJoCo model")
     p.add_argument("--band", action="store_true",
-                   help="suspend the robot from an elastic band, so a fall does not end "
-                        "the session while tuning whole-body control")
+                   help="suspend the robot from an elastic band (vertical support only, "
+                        "so it can still step and shift weight), to keep a fall from "
+                        "ending the session while tuning whole-body control")
     p.add_argument("--band-release", type=float, default=0.0,
                    help="with --band, release it after this many seconds to see whether "
                         "the policy holds unaided")
