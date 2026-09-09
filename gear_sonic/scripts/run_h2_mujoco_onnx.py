@@ -797,10 +797,54 @@ class SmplSource(PicoSource):
         self.duration = float("inf")
         self._last_block = None
 
+    # SMPL joint indices this class touches when synthesising from 3 points.
+    J_HEAD, J_L_ELBOW, J_R_ELBOW = 15, 18, 19
+    J_L_WRIST, J_R_WRIST, J_L_HAND, J_R_HAND = 20, 21, 22, 23
+    J_L_SHOULDER, J_R_SHOULDER = 16, 17
+
+    def _body_from_3point(self):
+        """Build a 24-joint skeleton from headset and controllers alone.
+
+        Full body tracking needs PICO Motion Trackers. Without them the smpl
+        head can still be driven: the arms come from the two controllers and the
+        head from the headset, while the legs hold the neutral standing pose.
+        The result is whole-body in shape -- all 24 joints present and coherent
+        -- but only the upper half is actually the operator.
+
+        Offsets are deltas from the zeroed pose, the same convention the 3-point
+        path uses, so no assumption is needed about where the operator's pelvis
+        is relative to the headset.
+        """
+        if self.zero is None:
+            return None
+        current = self._read()
+        if not self.live:
+            return None
+        sk = self.NEUTRAL_SKELETON.copy()
+        gain = self.gain
+        for key, wrist, hand, elbow, shoulder in (
+            ("left", self.J_L_WRIST, self.J_L_HAND, self.J_L_ELBOW, self.J_L_SHOULDER),
+            ("right", self.J_R_WRIST, self.J_R_HAND, self.J_R_ELBOW, self.J_R_SHOULDER),
+        ):
+            delta = np.clip((current[key][0] - self.zero[key][0]) * gain,
+                            -self.max_offset, self.max_offset)
+            sk[wrist] = sk[wrist] + delta
+            sk[hand] = sk[hand] + delta
+            # Elbow is not tracked, so place it midway between shoulder and
+            # wrist. A straight-line guess beats leaving it at the rest pose,
+            # which would imply an impossible arm.
+            sk[elbow] = 0.5 * (sk[shoulder] + sk[wrist])
+        head_delta = np.clip((current["head"][0] - self.zero["head"][0]) * gain,
+                             -self.max_offset, self.max_offset)
+        sk[self.J_HEAD] = sk[self.J_HEAD] + head_delta
+        return sk, current["head"][1]
+
     def _body(self):
         """24 SMPL joints as (positions, root quaternion) in the robot frame."""
         if not self.xrt.is_body_data_available():
-            return None
+            # No Motion Trackers: synthesise the skeleton from the 3 points we do
+            # have rather than refusing to run.
+            return self._body_from_3point()
         raw = np.asarray(self.xrt.get_body_joints_pose(), dtype=np.float64)
         if raw.shape != (self.NUM_SMPL_JOINTS, 7):
             return None
