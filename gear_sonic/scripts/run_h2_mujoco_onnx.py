@@ -639,9 +639,19 @@ class PicoSource:
 
     def set_zero(self):
         """Capture the current pose as the origin. Call with arms in the robot's stance."""
+        raw = {
+            "headset": self.xrt.get_headset_pose(),
+            "left controller": self.xrt.get_left_controller_pose(),
+            "right controller": self.xrt.get_right_controller_pose(),
+        }
+        missing = [k for k, v in raw.items() if not self._is_live(v)]
         current = self._read()
         if not self.live:
-            print("  [pico] no tracking data -- is the headset connected and streaming?")
+            # Zeroing needs all three at once, and a controller that has gone to
+            # sleep reports zeros while the headset streams happily -- so say
+            # which one is missing rather than blaming the connection.
+            print(f"  [pico] not zeroed: no data from {', '.join(missing)}"
+                  f" (wake it and press A again)")
             return False
         self.zero = {k: (p.copy(), self._pitch_yaw(r)) for k, (p, r) in current.items()}
         return True
