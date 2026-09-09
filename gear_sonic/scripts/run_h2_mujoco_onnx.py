@@ -807,6 +807,57 @@ class SmplSource(PicoSource):
         return block
 
 
+class HybridSource:
+    """Start on 3-point, promote to whole-body once the operator is braced.
+
+    Whole-body puts the operator's legs in charge of the robot's legs, which is
+    the point of it and also the risk: engaging it the instant tracking starts
+    means the first thing the robot sees is whatever pose you happened to be in.
+    3-point cannot do that -- the legs hold a standing reference no matter what
+    the operator does -- so it is the safe state to begin in.
+
+    So this runs the teleop head until the operator presses B, then switches to
+    the smpl head. Both heads read the same 990-dim proprioception, and the
+    history buffers belong to the observation builder rather than to either
+    head, so the switch carries continuous state across and needs no re-zeroing.
+
+    The two heads are different models, so both are loaded up front; switching
+    is a matter of which session and which reference block get used.
+    """
+
+    name = "hybrid"
+
+    def __init__(self, spec, model, mujoco, pico, smpl_source):
+        self.pico = pico
+        self.teleop = TeleopReference(spec, model, mujoco, target_fn=pico.targets)
+        self.smpl = smpl_source
+        self.whole_body = False
+        self._prev_b = False
+        self.duration = float("inf")
+
+    def poll(self):
+        self.pico.poll()
+        pressed = bool(self.pico.xrt.get_B_button())
+        if pressed and not self._prev_b and self.pico.zero is not None:
+            self.whole_body = not self.whole_body
+            mode = "WHOLE BODY -- your legs drive the robot" if self.whole_body else "3-point (arms only)"
+            print(f"  [mode] {mode}")
+        self._prev_b = pressed
+        return self.pico.zero is not None
+
+    @property
+    def size(self):
+        return SmplSource.SIZE if self.whole_body else TeleopReference.SIZE
+
+    def reference_block(self, t, anchor_heading_quat):
+        if self.whole_body:
+            return self.smpl.reference_block(t, anchor_heading_quat)
+        return self.teleop.reference_block(t, anchor_heading_quat)
+
+    def head(self, t):
+        return self.pico.head(t)
+
+
 # --------------------------------------------------------------------------
 # Observation assembly
 # --------------------------------------------------------------------------
@@ -916,9 +967,23 @@ def run(args):
     session = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
     in_name = session.get_inputs()[0].name
     expected = session.get_inputs()[0].shape[-1]
+    smpl_session = smpl_in_name = None
+    if args.onnx_smpl:
+        smpl_session = ort.InferenceSession(args.onnx_smpl, providers=["CPUExecutionProvider"])
+        smpl_in_name = smpl_session.get_inputs()[0].name
 
     pico = None
-    if args.reference == "static":
+    hybrid = None
+    if args.reference == "hybrid":
+        if not args.onnx_smpl:
+            raise SystemExit("--reference hybrid needs --onnx-smpl as well as --onnx")
+        pico = PicoSource(position_gain=args.pico_gain, track_head=not args.pico_no_head)
+        hybrid = HybridSource(spec, model, mujoco, pico,
+                              SmplSource(spec, position_gain=args.pico_gain,
+                                         track_head=not args.pico_no_head))
+        hybrid.smpl.xrt = pico.xrt          # one SDK connection, shared
+        reference = hybrid
+    elif args.reference == "static":
         reference = StaticReference(spec)
     elif args.reference == "smpl":
         pico = SmplSource(spec, position_gain=args.pico_gain,
@@ -949,8 +1014,8 @@ def run(args):
     action = np.zeros(NUM_DOF)
     obs.reset(data, action)
 
-    ref_size = {"teleop": TeleopReference.SIZE, "smpl": SmplSource.SIZE}.get(
-        args.reference, 680)
+    ref_size = {"teleop": TeleopReference.SIZE, "smpl": SmplSource.SIZE,
+                "hybrid": TeleopReference.SIZE}.get(args.reference, 680)
     proprio = obs.proprioception()
     if proprio.size + ref_size != expected:
         raise SystemExit(
@@ -968,6 +1033,8 @@ def run(args):
         print(f"band       suspended at {args.height:.2f} m{rel}")
     print("head       " + ("following the headset" if (pico and not args.pico_no_head)
                             else "commanded level and forward"))
+    if hybrid is not None:
+        print("mode       starting on 3-point; press B to promote to whole body")
     if pico is not None:
         print()
         print("  Stand in the robot's stance -- arms relaxed, facing forward -- and press A")
@@ -1026,17 +1093,26 @@ def run(args):
           try:
             step += 1
             t = step * control_dt
-            if pico is not None:
+            if hybrid is not None:
+                hybrid.poll()
+            elif pico is not None:
                 pico.poll()
             heading = heading_quat(data.qpos[3:7])
-            if args.reference in ("teleop", "smpl"):
+            if args.reference == "hybrid":
+                ref_block = reference.reference_block(t, heading)
+                active = smpl_session if hybrid.whole_body else session
+                active_in = smpl_in_name if hybrid.whole_body else in_name
+            elif args.reference in ("teleop", "smpl"):
                 ref_block = reference.reference_block(t, heading)
             else:
                 ref_jp, ref_jv, ref_quat = reference.sample(t, heading)
                 ref_block = obs.reference(ref_jp, ref_jv, ref_quat, heading)
 
             model_in = np.concatenate([ref_block, obs.proprioception()]).astype(np.float32)[None, :]
-            action = session.run(None, {in_name: model_in})[0][0].astype(np.float64)
+            if args.reference == "hybrid":
+                action = active.run(None, {active_in: model_in})[0][0].astype(np.float64)
+            else:
+                action = session.run(None, {in_name: model_in})[0][0].astype(np.float64)
             action = np.clip(action, -ACTION_CLIP, ACTION_CLIP)
 
             target_mj = spec.il_to_mj_vec(action * spec.action_scale_il + spec.default_il)
@@ -1122,11 +1198,15 @@ def main(argv=None):
     p.add_argument("--onnx", default=os.path.join(REPO_ROOT, "h2_policy", "onnx",
                                                   "model_step_100000_g1.onnx"),
                    help="fused per-mode ONNX head; the g1 head is the motion-tracking one")
-    p.add_argument("--reference", choices=["static", "motion", "teleop", "smpl"],
+    p.add_argument("--onnx-smpl",
+                   help="the smpl head, required by --reference hybrid")
+    p.add_argument("--reference",
+                   choices=["static", "motion", "teleop", "smpl", "hybrid"],
                    default="static",
                    help="'smpl' is whole-body: the operator's legs drive the robot's "
                         "legs, and it needs PICO Motion Trackers. 'teleop' is 3-point, "
-                        "arms only.")
+                        "arms only. 'hybrid' starts on 3-point and promotes to whole-body "
+                        "when you press B, so you engage the legs deliberately.")
     p.add_argument("--pico", action="store_true",
                    help="teleop only: drive the hand and head targets from a PICO headset via "
                         "XRoboToolkit (the PC service must be running)")
