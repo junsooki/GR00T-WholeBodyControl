@@ -1101,17 +1101,27 @@ def run(args):
     print(f"horizon    {'until the viewer window is closed' if n_control is None else '%.1f s' % horizon}"
           + ("   (real time)" if args.viewer else ""))
 
-    frames = []
+    n_frames = 0
     heights, fell_at = [], None
     viewer_used = bool(args.viewer)
     band = ElasticBand(height=args.height) if args.band else None
     pelvis_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
 
     with contextlib.ExitStack() as stack:
-        renderer = None
+        renderer = writer = None
         if args.video:
             renderer = stack.enter_context(
                 mujoco.Renderer(model, height=args.render_height, width=args.render_width))
+            # Written frame by frame rather than collected and saved at the end.
+            # Buffering costs about 0.9 MB per frame, so an open-ended run -- the
+            # normal way to use --viewer -- would grow without bound and die in
+            # swap. Streaming also means a run killed with Ctrl+C still leaves a
+            # playable file.
+            import imageio
+
+            fps = round(1.0 / (SIM_DT * DECIMATION * args.render_every))
+            writer = stack.enter_context(
+                imageio.get_writer(args.video, fps=fps, macro_block_size=None))
         if pico is not None:
             stack.callback(pico.close)
         viewer_ctx = None
@@ -1188,7 +1198,8 @@ def run(args):
 
             if renderer is not None and step % args.render_every == 0:
                 renderer.update_scene(data, camera=cam_id)
-                frames.append(renderer.render())
+                writer.append_data(renderer.render())
+                n_frames += 1
             if viewer_ctx is not None:
                 if not viewer_ctx.is_running():
                     break
@@ -1216,12 +1227,9 @@ def run(args):
           f"min {heights.min():.3f}  end {heights[-1]:.3f}")
     print(f"outcome    {'FELL at %.1f s' % fell_at if fell_at is not None else 'stayed up'}")
 
-    if frames:
-        import imageio
-
+    if n_frames:
         fps = round(1.0 / (SIM_DT * DECIMATION * args.render_every))
-        imageio.mimsave(args.video, frames, fps=fps)
-        print(f"video      {args.video} ({len(frames)} frames @ {fps} fps)")
+        print(f"video      {args.video} ({n_frames} frames @ {fps} fps)")
 
     status = 0 if fell_at is None else 1
     if viewer_used:
