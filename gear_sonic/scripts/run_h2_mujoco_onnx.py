@@ -879,6 +879,7 @@ class SmplSource(PicoSource):
         # them out in front, which is what makes the robot's shoulders sit near
         # rest instead of swung back.
         self._warned_estimated = False
+        self._warned_nobody = False
         self.skeleton = self.NEUTRAL_SKELETON.copy()
         self.skeleton[list(self.ARM_JOINTS), 0] += self.ARM_FORWARD
         self.duration = float("inf")
@@ -963,7 +964,17 @@ class SmplSource(PicoSource):
         # entirely. It is worth using now, but the operator should know which
         # kind of legs they are driving.
         if not self.xrt.is_body_data_available():
-            return self._body_from_3point()
+            # smpl is the whole-body mode and stays that way. Quietly falling
+            # back to driving the arms from the controllers would leave the
+            # operator in teleop while the console still said smpl, which is
+            # exactly the confusion this mode exists to avoid. Hold instead, and
+            # say why.
+            if not self._warned_nobody:
+                self._warned_nobody = True
+                print("  [pico] no body data -- holding. Whole body needs body tracking "
+                      "enabled on the headset (XRoboToolkit -> PICO Motion Tracker -> "
+                      "Full-body). Use --reference teleop for controller-only.")
+            return None
         if not self._warned_estimated:
             self._warned_estimated = True
             if self.xrt.num_motion_data_available() < 1:
