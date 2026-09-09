@@ -841,14 +841,14 @@ class SmplSource(PicoSource):
         [0.00, 0.09, -0.08],  # 1  L hip
         [0.00, -0.09, -0.08], # 2  R hip
         [0.00, 0.00, 0.12],   # 3  spine1
-        [0.10, 0.09, -0.48],  # 4  L knee
-        [0.10, -0.09, -0.48], # 5  R knee
+        [0.00, 0.09, -0.48],  # 4  L knee
+        [0.00, -0.09, -0.48], # 5  R knee
         [0.00, 0.00, 0.25],   # 6  spine2
-        [0.10, 0.09, -0.88],  # 7  L ankle
-        [0.10, -0.09, -0.88], # 8  R ankle
+        [0.00, 0.09, -0.88],  # 7  L ankle
+        [0.00, -0.09, -0.88], # 8  R ankle
         [0.00, 0.00, 0.32],   # 9  spine3
-        [0.22, 0.09, -0.94],  # 10 L foot
-        [0.22, -0.09, -0.94], # 11 R foot
+        [0.12, 0.09, -0.94],  # 10 L foot
+        [0.12, -0.09, -0.94], # 11 R foot
         [0.00, 0.00, 0.50],   # 12 neck
         [0.00, 0.08, 0.44],   # 13 L collar
         [0.00, -0.08, 0.44],  # 14 R collar
@@ -865,12 +865,24 @@ class SmplSource(PicoSource):
 
     # Arm joints the forward offset moves: collars, shoulders, elbows, wrists, hands.
     ARM_JOINTS = (13, 14, 16, 17, 18, 19, 20, 21, 22, 23)
-    # How far in front of the body the reference arms sit. Measured against
-    # shoulder pitch deviation from H2's rest pose: 0.00 gives 35 deg, 0.18
-    # gives 17, 0.26 gives 4, 0.34 gives 6. It costs balance headroom -- the
-    # centre of mass moves forward and the policy holds a lean -- so the pelvis
-    # wobble grows with it.
-    ARM_FORWARD = 0.26
+    # How far in front of the body the reference arms sit.
+    #
+    # This trades the arm pose against how upright the robot stands, and the
+    # torso is the one that matters. Arms out in front carry the mass forward
+    # and the robot leans to hold it -- measured as the torso's tilt from
+    # vertical, with the reference legs moved forward to match:
+    #
+    #     arm fwd   torso lean   shoulder   wobble   min height
+    #       0.00      -4.6 deg    36.7 deg   6.2 mm     0.994
+    #       0.10      +4.5 deg    24.9 deg   0.5 mm     1.005   (this)
+    #       0.18     +13.4 deg    12.0 deg   1.7 mm     0.997
+    #       0.26     +22.2 deg     0.4 deg   0.6 mm     0.985
+    #
+    # 0.26 gives the best-looking arms and a 22 degree stoop, which is worse on
+    # every other axis: lower, and holding a lean it does not need. Standing
+    # upright costs arm pose and buys height, stability and a posture that reads
+    # as a robot standing rather than one about to fall over.
+    ARM_FORWARD = 0.10
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
         super().__init__(position_gain=position_gain, track_head=track_head)
