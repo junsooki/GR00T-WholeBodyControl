@@ -797,37 +797,30 @@ class SmplSource(PicoSource):
     #            copied correctly.
     # Arms hang at the sides here, which is what a person standing still does.
     #
-    # The exact arm placement is tuned, not anatomical. What matters is where the
+    # The arm placement is tuned, not anatomical. What matters is where the
     # policy puts the robot's shoulders after retargeting, and that is not
-    # obvious from the skeleton: a plausible-looking human pose can retarget to
-    # arms held out. Sweeping how far the arms hang out and forward and measuring
-    # the resulting shoulder deviation from H2's rest pose:
+    # visible from the skeleton: a plausible human pose can retarget to arms
+    # held out and swung forward.
     #
-    #     out      all shoulders   shoulder roll   wrist from centre
-    #     0.11         13.2 deg         6.9 deg         0.247 m   (this)
-    #     0.14         12.6 deg         7.2 deg         0.256 m
-    #     0.17         12.9 deg        10.1 deg         0.278 m
-    #     0.20         13.3 deg        11.4 deg         0.290 m
-    #     0.38         34.1 deg           --            --
+    # Tuning it needs the deviation split by axis, because the axes disagree.
+    # Optimising the average trades pitch away to flatten roll. Measured against
+    # H2's rest pose, with the arm hanging straight down from the shoulder:
     #
-    # Shoulder roll is what holds the arm away from the body, so it is the term
-    # worth minimising even where the overall figure is flat: the arms tuck in
-    # rather than standing off. Slightly forward of the body beats straight down
-    # at every width tried.
+    #     shoulder X   shoulder pitch   all shoulders
+    #        0.00         35.5 deg         14.3 deg
+    #        0.10         25.9 deg         10.0 deg
+    #        0.18         17.2 deg          7.4 deg
+    #        0.26          4.4 deg          4.5 deg   (this)
+    #        0.34          5.8 deg          8.4 deg
     #
-    # The elbow is placed separately from the wrist rather than interpolated
-    # between shoulder and wrist, because pulling it in independently tucks the
-    # upper arm without splaying the forearm:
+    # Pitch was the whole residual once roll was tucked -- 22 deg with the arms
+    # near the body, and it does not improve by pulling them back, it doubles.
+    # Moving the shoulder forward instead collapses it to 4.4 deg.
     #
-    #     elbow Y   robot elbow out   shoulders
-    #       0.09        0.281 m        13.1 deg
-    #       0.06        0.265 m         9.5 deg
-    #       0.03        0.259 m         8.7 deg   (this)
-    #       0.00        0.259 m         9.6 deg
-    #
-    # It stops improving at 0.03 -- pulling the reference elbow to the
-    # centreline does not bring the robot's any closer, since H2's upper arm
-    # cannot fold that far.
+    # The elbow is placed independently rather than interpolated between
+    # shoulder and wrist, which tucks the upper arm without splaying the
+    # forearm; it stops improving below Y=0.03, since H2's upper arm cannot fold
+    # further.
     NEUTRAL_SKELETON = np.array([
         [0.00, 0.00, 0.00],   # 0  pelvis
         [0.00, 0.09, -0.08],  # 1  L hip
@@ -842,17 +835,17 @@ class SmplSource(PicoSource):
         [0.12, 0.09, -0.94],  # 10 L foot
         [0.12, -0.09, -0.94], # 11 R foot
         [0.00, 0.00, 0.50],   # 12 neck
-        [0.00, 0.08, 0.44],   # 13 L collar
-        [0.00, -0.08, 0.44],  # 14 R collar
+        [0.13, 0.08, 0.44],   # 13 L collar
+        [0.13, -0.08, 0.44],  # 14 R collar
         [0.00, 0.00, 0.60],   # 15 head
-        [0.00, 0.17, 0.45],   # 16 L shoulder
-        [0.00, -0.17, 0.45],  # 17 R shoulder
-        [0.06, 0.03, 0.18],   # 18 L elbow
-        [0.06, -0.03, 0.18],  # 19 R elbow
-        [0.13, 0.11, -0.08],  # 20 L wrist
-        [0.13, -0.11, -0.08], # 21 R wrist
-        [0.14, 0.11, -0.16],  # 22 L hand
-        [0.14, -0.11, -0.16], # 23 R hand
+        [0.26, 0.17, 0.45],   # 16 L shoulder  -- forward
+        [0.26, -0.17, 0.45],  # 17 R shoulder
+        [0.26, 0.03, 0.18],   # 18 L elbow     -- hanging straight down
+        [0.26, -0.03, 0.18],  # 19 R elbow
+        [0.26, 0.11, -0.08],  # 20 L wrist
+        [0.26, -0.11, -0.08], # 21 R wrist
+        [0.27, 0.11, -0.16],  # 22 L hand
+        [0.27, -0.11, -0.16], # 23 R hand
     ])
 
     def __init__(self, spec, position_gain=1.0, track_head=True):
