@@ -664,22 +664,13 @@ class PicoSource:
         # A, or either trigger. The app has a "Switch w/ A Button" option that
         # intercepts A to toggle transmission, in which case the press never
         # reaches here -- so engaging must not depend on that one button.
-        # Any face button or either trigger.
-        #
-        # A single trigger is the gripper control in the repo's PICO server, but
-        # this runner drives no gripper, so there is nothing for it to clash
-        # with here -- and on a headset whose app intercepts A, a trigger is the
-        # only input that reaches the SDK at all. Requiring both triggers to
-        # avoid a collision that does not exist just left the operator unable to
-        # engage.
-        sources = [name for name, held in (
-            ("A", bool(self.xrt.get_A_button())),
-            ("B", bool(self.xrt.get_B_button())),
-            ("X", bool(self.xrt.get_X_button())),
-            ("Y", bool(self.xrt.get_Y_button())),
-            ("right trigger", self.xrt.get_right_trigger() > 0.5),
-            ("left trigger", self.xrt.get_left_trigger() > 0.5),
-        ) if held]
+        # A+B together, or X+Y together. Deliberately a two-button combination
+        # rather than any single control: triggers and grips are what the hands
+        # are held with, and a single face button is easy to catch by accident
+        # while reaching. A combination cannot be pressed without meaning it.
+        ab = bool(self.xrt.get_A_button()) and bool(self.xrt.get_B_button())
+        xy = bool(self.xrt.get_X_button()) and bool(self.xrt.get_Y_button())
+        sources = [name for name, held in (("A+B", ab), ("X+Y", xy)) if held]
         pressed = bool(sources)
         if pressed and not self._prev_a and self.set_zero():
             # Name the input, so an engage nobody asked for is traceable to
@@ -1306,7 +1297,7 @@ def run(args):
     if hybrid is not None:
         print("mode       3-point; press B for whole body")
     if pico is not None:
-        print("engage     any of A / B / X / Y, or either trigger")
+        print("engage     A+B together, or X+Y together")
 
     control_dt = SIM_DT * DECIMATION
     # With the viewer open and no explicit --seconds, run until the window is
