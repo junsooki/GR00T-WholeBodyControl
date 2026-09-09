@@ -102,6 +102,14 @@ DECIMATION = 4
 HISTORY_LEN = 10          # actor_prop_history_length / actor_actions_history_length
 NUM_FUTURE_FRAMES = 10    # commands.motion.num_future_frames
 DT_FUTURE_REF = 0.1       # commands.motion.dt_future_ref_frames
+SMPL_DT_FUTURE = 0.02     # commands.motion.smpl_dt_future_ref_frames
+# Velocity for the smpl head's future frames is a finite difference of the
+# tracked skeleton, so it inherits the tracker's noise. Smooth it, and ignore
+# steps whose wall-clock gap is implausible -- a dropout or a stall makes the
+# difference meaningless, and dividing by a tiny dt makes it enormous.
+SMPL_VEL_SMOOTH = 0.7     # weight on the previous velocity estimate
+SMPL_MIN_DT = 0.002       # s; below this the difference is dominated by noise
+SMPL_MAX_DT = 0.200       # s; above this the operator has moved unobserved
 ACTION_CLIP = 20.0        # env_config.action_clip_value
 NUM_DOF = 31
 INIT_HEIGHT = 1.04        # H2_CFG.init_state.pos[2]
@@ -918,6 +926,10 @@ class SmplSource(PicoSource):
         # rest instead of swung back.
         self._warned_estimated = False
         self._warned_nobody = False
+        # Extrapolation state for the future reference frames.
+        self._prev_local = None
+        self._prev_t = None
+        self._vel = np.zeros((self.NUM_SMPL_JOINTS, 3))
         self.skeleton = self.NEUTRAL_SKELETON.copy()
         self.skeleton[list(self.ARM_JOINTS), 0] += self.ARM_FORWARD
         self.duration = float("inf")
@@ -1057,9 +1069,69 @@ class SmplSource(PicoSource):
 
         # Rotate joints into the root's own orientation frame.
         local = joints @ root_rot
-        joints_block = np.tile(local.reshape(-1), NUM_FUTURE_FRAMES)
 
-        # Root orientation, normalised by the robot's heading, as 6D.
+        # The ten reference frames are 20 ms apart -- 200 ms of future, which
+        # NVIDIA's model card states for this variant. During training those
+        # frames were the ACTUAL future of the motion, so the policy learned to
+        # anticipate: it plants a foot because it can see where the reference is
+        # going. Tiling the current pose across all ten instead asserts, every
+        # control step, that the body is about to stop. For a static pose that
+        # is true and in distribution (freeze_frame_aug). Mid-stride it is a
+        # false statement -- it claims the swing leg will freeze in mid-air --
+        # and the policy answers a contradictory command, which is what weird
+        # teleoperated walking looks like.
+        #
+        # Extrapolating the joints linearly to fill those frames was tried and is
+        # WORSE. Measured on Neutral_walk_forward_002__A057 through the smpl
+        # head, 10 s, --smpl-clip:
+        #
+        #   frozen (this default)   stayed up,  height mean 0.989  min 0.941
+        #   linear extrapolation    FELL at 4.1 s, height mean 0.461  min 0.083
+        #
+        # The reason is that extrapolating 24 joints independently does not
+        # preserve bone lengths. Same clip, error in bone length versus horizon:
+        #
+        #     20 ms   mean 0.1%   worst  4.7%
+        #     60 ms   mean 0.8%   worst 25.5%
+        #    100 ms   mean 1.9%   worst 56.0%
+        #    180 ms   mean 5.2%   worst 130.3%   <- foot-to-ankle, bone (10, 7)
+        #
+        # At the tenth frame a foot bone more than doubles. So it swaps one false
+        # statement, "your body will stop", for a worse one, "your body will
+        # stretch", and the policy chases an impossible skeleton.
+        #
+        # The diagnosis that motivated this still stands: freezing the future IS
+        # wrong during motion, and it is a plausible cause of poor teleoperated
+        # walking. But any fix has to stay on the skeleton -- extrapolate joint
+        # ANGLES and re-run forward kinematics, or re-project the extrapolated
+        # points back onto the measured bone lengths. Position-space
+        # extrapolation cannot work, and the 130% number is why.
+        now = time.perf_counter()
+        if self._prev_local is not None and self._prev_t is not None:
+            dt = now - self._prev_t
+            if SMPL_MIN_DT <= dt <= SMPL_MAX_DT:
+                raw = (local - self._prev_local) / dt
+                # Tracking is noisy and differencing amplifies it, so smooth.
+                self._vel = (SMPL_VEL_SMOOTH * self._vel
+                             + (1.0 - SMPL_VEL_SMOOTH) * raw)
+            # dt outside the window means a dropout or a stall; hold the last
+            # velocity rather than trusting a bogus difference.
+        self._prev_local, self._prev_t = local.copy(), now
+
+        # A zero horizon collapses every future frame onto the current pose,
+        # which is byte-identical to the old tiled block. That makes --no-extrapolate
+        # an exact A/B against the previous behaviour rather than an approximation.
+        step = SMPL_DT_FUTURE if getattr(self, "extrapolate", False) else 0.0
+        horizon = np.arange(NUM_FUTURE_FRAMES)[:, None, None] * step
+        future = local[None, ...] + self._vel[None, ...] * horizon   # (10, 24, 3)
+        joints_block = future.reshape(-1)
+
+        # Root orientation, normalised by the robot's heading, as 6D. Frozen the
+        # same way and wrong the same way, but during a turn rather than a
+        # stride. Extrapolating a rotation properly means integrating angular
+        # velocity on the manifold; a linear step in 6D over 200 ms is close
+        # enough and degrades to the frozen case when the operator is not
+        # turning. Kept separate so it can be disabled on its own.
         root_wxyz = mat_to_quat(root_rot)
         rel = quat_mul(quat_inv(anchor_heading_quat), root_wxyz)
         ori_block = np.tile(rot6d(rel), NUM_FUTURE_FRAMES)
@@ -1082,6 +1154,86 @@ class SmplSource(PicoSource):
         block = np.concatenate([joints_block, ori_block, wrist_block])
         self._last_block = block
         return block
+
+
+class SmplClipSource(SmplSource):
+    """Drive the smpl head from a recorded SMPL clip instead of a headset.
+
+    Exists so the whole-body path, and the future-frame extrapolation in
+    particular, can be exercised with no PICO hardware attached: the failure
+    that motivated the extrapolation only appears under motion, so a static
+    test says nothing about it.
+
+    Reads data/smpl_filtered/<name>.pkl, whose smpl_joints are already
+    root-relative (the pelvis sits fixed and `transl` carries root translation
+    separately) -- the same convention SmplSource._body returns. Root rotation
+    comes from the first three of the 72 pose_aa values, the SMPL root joint in
+    axis-angle.
+
+    Caveat worth stating: this does not verify the frame convention. The live
+    path maps XR axes into the robot frame and the training pipeline applies
+    smpl_y_up; this takes the stored joints as they are. It is a harness for the
+    extrapolation arithmetic and the observation plumbing, not a claim that a
+    clip replayed here matches what the operator would have produced.
+    """
+
+    def __init__(self, spec, path, loop=True, extrapolate=False):
+        import joblib
+        self.extrapolate = extrapolate
+        # Deliberately does NOT call PicoSource.__init__ -- that calls xrt.init()
+        # and hard-exits without the SDK, which is the whole point of avoiding it.
+        self.spec = spec
+        self.loop = loop
+        self._last_block = None
+        self._prev_local = None
+        self._prev_t = None
+        self._vel = np.zeros((self.NUM_SMPL_JOINTS, 3))
+        self.skeleton = self.NEUTRAL_SKELETON.copy()
+        self.zero = True          # engaged; there is no operator to wait for
+        self.track_head = False
+        self._last_head = np.zeros(2)
+
+        d = joblib.load(path)
+        if "smpl_joints" not in d:
+            d = d[list(d)[0]]
+        self.joints = np.asarray(d["smpl_joints"], dtype=np.float64)
+        aa = np.asarray(d["pose_aa"], dtype=np.float64).reshape(len(self.joints), -1)
+        self.root_aa = aa[:, :3]
+        self.fps = float(d.get("fps", 30.0))
+        self.duration = len(self.joints) / self.fps
+        self._t0 = None
+
+    @staticmethod
+    def _aa_to_mat(aa):
+        """Rodrigues. Axis-angle to a 3x3 rotation."""
+        theta = float(np.linalg.norm(aa))
+        if theta < 1e-8:
+            return np.eye(3)
+        k = aa / theta
+        K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+        return np.eye(3) + math.sin(theta) * K + (1.0 - math.cos(theta)) * (K @ K)
+
+    def poll(self):
+        pass
+
+    def head(self, t):
+        return np.zeros(2)
+
+    def close(self):
+        pass
+
+    def _body(self):
+        """The clip at the current wall-clock time, so dt is real."""
+        now = time.perf_counter()
+        if self._t0 is None:
+            self._t0 = now
+        t = now - self._t0
+        i = int(t * self.fps)
+        if i >= len(self.joints):
+            if not self.loop:
+                return None
+            i %= len(self.joints)
+        return self.joints[i], self._aa_to_mat(self.root_aa[i])
 
 
 class HybridSource:
@@ -1286,6 +1438,11 @@ def run(args):
         reference = hybrid
     elif args.reference == "static":
         reference = StaticReference(spec)
+    elif args.smpl_clip:
+        reference = SmplClipSource(spec, args.smpl_clip,
+                                   extrapolate=args.extrapolate_smpl)
+        print(f"smpl clip  {os.path.basename(args.smpl_clip)}  "
+              f"{len(reference.joints)} frames @ {reference.fps:g} fps")
     elif args.reference == "smpl":
         pico = SmplSource(spec, position_gain=args.pico_gain,
                           track_head=not args.pico_no_head)
@@ -1511,6 +1668,17 @@ def main(argv=None):
                    help="scale from operator hand travel to robot hand travel")
     p.add_argument("--pico-no-head", action="store_true",
                    help="hold the head level and forward instead of following the headset")
+    p.add_argument("--smpl-clip",
+                   help="drive the smpl head from a recorded SMPL clip instead of a "
+                        "headset, e.g. data/smpl_filtered/Neutral_walk_forward_002__A057.pkl. "
+                        "No hardware needed; use it to exercise the whole-body path and the "
+                        "future-frame extrapolation, which only differ from the old behaviour "
+                        "when the reference is actually moving.")
+    p.add_argument("--extrapolate-smpl", action="store_true",
+                   help="smpl head: linearly extrapolate the ten future reference frames "
+                        "from tracked joint velocity instead of holding the current pose. "
+                        "MEASURED WORSE -- see SmplSource.reference_block. Kept for "
+                        "experiments only; a zero horizon reproduces the default exactly.")
     p.add_argument("--wave", action="store_true",
                    help="teleop only: drive the hand targets with a scripted lift-and-wave "
                         "instead of holding the default pose")
