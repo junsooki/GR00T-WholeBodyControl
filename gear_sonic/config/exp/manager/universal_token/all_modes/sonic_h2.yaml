@@ -194,9 +194,32 @@ algo:
         decoders:
           g1_kin:
             outputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
+          # g1_dyn is the ACTION HEAD, not a training-only component: it emits
+          # body_action, which becomes action_mean (universal_token_modules.py
+          # 918-922), and it is the decoder eval and ONNX export use.
+          #
+          # The shipped H2 config left it at the base default of
+          # 2048/2048/1024/1024/512/512 -- 10.25 M parameters -- against the G1
+          # v1.1 recipe's 4096/4096/2048/2048/1024/1024/512/512 at 37.52 M.
+          # That is 27% of the reference's capacity, with two fewer layers, on
+          # a robot of 2.2x the mass, in a config NVIDIA never validated with a
+          # released checkpoint. The encoders and g1_kin were already at parity;
+          # only the part that turns the token into joint targets was cut.
+          #
+          # Restored to the v1.1 width. Memory headroom exists: the 100000-step
+          # run used 18.4 of 80 GB per card. If it does not fit at
+          # num_envs=4096, reduce num_envs LAST -- that cuts the batch below
+          # 32768 and widens the experience gap this is meant to narrow.
+          g1_dyn:
+            params:
+              module_config_dict:
+                layer_config:
+                  hidden_dims: [4096, 4096, 2048, 2048, 1024, 1024, 512, 512]
 
     critic:
       backbone:
         module_config_dict:
           layer_config:
-            hidden_dims: [2048, 2048, 1024, 1024, 512, 512]
+            # Matched to v1.1 as well. Training only, discarded at export, but a
+            # weaker critic means noisier advantages for the actor.
+            hidden_dims: [4096, 4096, 2048, 2048, 1024, 1024, 512, 512]
